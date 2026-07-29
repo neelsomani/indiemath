@@ -9,6 +9,8 @@ import {
   calculateSettledButUnfundedCents,
   deriveDonationRefundState,
   deriveDonationWaterline,
+  MAX_RUN_BUDGET_CENTS,
+  MINIMUM_RUN_BUDGET_CENTS,
   parseDirection,
   parseDonation,
   parseProblemId,
@@ -21,8 +23,7 @@ import {
   LEDGER_SCHEMA_VERSION,
 } from "./schema.mjs";
 
-const MAX_RUN_BUDGET_CENTS = 50_000;
-const RESIDUE_FLOOR_CENTS = 5_000;
+const RESIDUE_FLOOR_CENTS = MINIMUM_RUN_BUDGET_CENTS;
 const LEASE_MILLISECONDS = 65 * 60 * 1000;
 const FUNDING_MODES = new Set(["pool-first", "pool-only", "general-only"]);
 const SQLITE_WRITE_RETRY_CLOCK = new Int32Array(new SharedArrayBuffer(4));
@@ -708,35 +709,29 @@ export class SQLiteLedger {
 
   sweep({ problemId }) {
     const parsedProblemId = parseProblemId(problemId);
+    return this.#transaction(() => this.#sweepInsideTransaction(parsedProblemId));
+  }
+
+  sweepSolvedProblems() {
     return this.#transaction(() => {
-      const problem = this.#requireProblem(parsedProblemId);
-      if (problem.status !== "Solved") {
-        throw new LedgerError(
-          "problem-not-solved",
-          `Problem ${parsedProblemId} is ${problem.status}, not Solved.`,
-        );
-      }
-      let sweptCents = 0;
-      for (const direction of ["prove", "disprove"]) {
-        const claimable = this.#claimablePoolBalance(parsedProblemId, direction);
-        if (claimable === 0) continue;
-        const pool = this.#requirePool(parsedProblemId, direction);
-        this.#setPoolBalances({
-          problemId: parsedProblemId,
-          direction,
-          balanceCents: addCents(Number(pool.balance_cents), -claimable),
-          cumulativeDonationsCents: Number(pool.cumulative_donations_cents),
-        });
-        sweptCents = addCents(sweptCents, claimable);
-      }
-      if (sweptCents > 0) {
-        this.#setGeneralBalance(addCents(this.#generalBalance(), sweptCents));
-      }
-      return {
-        outcome: sweptCents > 0 ? "swept" : "unchanged",
-        problemId: parsedProblemId,
-        sweptCents,
-      };
+      const problemIds = this.#database.prepare(`
+        SELECT problem_id FROM problems
+        WHERE status = 'Solved'
+        ORDER BY problem_id
+      `).all().map((row) => row.problem_id);
+      const problems = problemIds.map((problemId) => (
+        Object.freeze(this.#sweepInsideTransaction(problemId))
+      ));
+      return Object.freeze({
+        outcome: problems.some((result) => result.sweptCents > 0)
+          ? "swept"
+          : "unchanged",
+        sweptCents: problems.reduce(
+          (total, result) => addCents(total, result.sweptCents),
+          0,
+        ),
+        problems: Object.freeze(problems),
+      });
     });
   }
 
@@ -1713,6 +1708,49 @@ export class SQLiteLedger {
     return row ? this.#mapClaim(row) : undefined;
   }
 
+  samplingSnapshot() {
+    return this.#readTransaction(() => {
+      const snapshotAt = this.#now().iso;
+      const pairs = this.#database.prepare(`
+        SELECT
+          pools.problem_id,
+          pools.direction,
+          pools.balance_cents,
+          problems.status,
+          claims.claim_ts,
+          claims.worker_id
+        FROM pools
+        JOIN problems USING (problem_id)
+        LEFT JOIN claims
+          ON claims.problem_id = pools.problem_id
+          AND claims.direction = pools.direction
+          AND claims.settled = 0
+        ORDER BY pools.problem_id, pools.direction
+      `).all().map((row) => Object.freeze({
+        problemId: row.problem_id,
+        direction: row.direction,
+        status: row.status,
+        weightableCents: Number(row.balance_cents),
+        runnableCents: this.#claimablePoolBalance(
+          row.problem_id,
+          row.direction,
+        ),
+        unsettledClaim: row.claim_ts === null
+          ? undefined
+          : Object.freeze({
+              claimTs: Number(row.claim_ts),
+              workerId: row.worker_id,
+            }),
+      }));
+      return Object.freeze({
+        snapshotAt,
+        spendableCapacityCents: this.#spendableCapacity(),
+        claimableGeneralCreditCents: this.#claimableGeneralBalance(),
+        pairs: Object.freeze(pairs),
+      });
+    });
+  }
+
   listUnsettledClaims() {
     this.#assertOpen();
     return this.#database.prepare(`
@@ -2049,6 +2087,37 @@ export class SQLiteLedger {
       );
     }
     return claimable;
+  }
+
+  #sweepInsideTransaction(problemId) {
+    const problem = this.#requireProblem(problemId);
+    if (problem.status !== "Solved") {
+      throw new LedgerError(
+        "problem-not-solved",
+        `Problem ${problemId} is ${problem.status}, not Solved.`,
+      );
+    }
+    let sweptCents = 0;
+    for (const direction of ["prove", "disprove"]) {
+      const claimable = this.#claimablePoolBalance(problemId, direction);
+      if (claimable === 0) continue;
+      const pool = this.#requirePool(problemId, direction);
+      this.#setPoolBalances({
+        problemId,
+        direction,
+        balanceCents: addCents(Number(pool.balance_cents), -claimable),
+        cumulativeDonationsCents: Number(pool.cumulative_donations_cents),
+      });
+      sweptCents = addCents(sweptCents, claimable);
+    }
+    if (sweptCents > 0) {
+      this.#setGeneralBalance(addCents(this.#generalBalance(), sweptCents));
+    }
+    return {
+      outcome: sweptCents > 0 ? "swept" : "unchanged",
+      problemId,
+      sweptCents,
+    };
   }
 
   #claimableGeneralBalance() {
@@ -2588,6 +2657,19 @@ export class SQLiteLedger {
         );
       }
     }
+    try {
+      const result = action();
+      this.#database.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  #readTransaction(action) {
+    this.#assertOpen();
+    this.#database.exec("BEGIN");
     try {
       const result = action();
       this.#database.exec("COMMIT");

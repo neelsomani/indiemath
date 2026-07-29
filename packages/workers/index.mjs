@@ -26,6 +26,13 @@ export {
   recoverWorkerStartup,
   settleExpiredClaims,
 } from "./recovery.mjs";
+export {
+  runSamplingCycle,
+  runWorkerLoop,
+  samplingPairKey,
+  secureDraw,
+  selectSamplingDecision,
+} from "./sampling.mjs";
 
 export function createWorkerRuntime({
   config,

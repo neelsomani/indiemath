@@ -1,0 +1,23 @@
+[Unit]
+Description=IndieMath Fable worker %i
+After=network-online.target indiemath-litestream.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=indiemath
+Group=indiemath
+WorkingDirectory=/opt/indiemath/current
+EnvironmentFile=/etc/indiemath/workers/%i.env
+ExecStart=/usr/bin/node /opt/indiemath/current/scripts/run-worker.mjs
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/indiemath
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
