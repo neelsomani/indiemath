@@ -1,0 +1,42 @@
+name: catalog
+
+on:
+  - push
+  - pull_request
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm run validate
+      - run: npm test
+      - name: Require a catalog revision increase
+        env:
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            base="$EVENT_BASE_SHA"
+          elif [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            base="$EVENT_BASE_SHA"
+          else
+            base="origin/main"
+          fi
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            echo "No base commit exists; accepting the initial catalog."
+            exit 0
+          fi
+          git diff --quiet "$base" -- problems/catalog.json && exit 0
+          if ! git cat-file -e "${base}:problems/catalog.json"; then
+            echo "No catalog exists at the base revision; accepting the initial catalog."
+            exit 0
+          fi
+          git show "${base}:problems/catalog.json" > "$RUNNER_TEMP/base-catalog.json"
+          node scripts/check-catalog-revision.mjs \
+            "$RUNNER_TEMP/base-catalog.json" \
+            problems/catalog.json

@@ -1,0 +1,959 @@
+{
+  "schema_version": 1,
+  "catalog_revision": 4,
+  "direction_contract": {
+    "statement": "The canonical, normally stated conjecture or positive resolution target.",
+    "prove": "The worker is asked to establish the canonical statement.",
+    "disprove": "The worker is asked to refute the canonical statement; the prompt records the appropriate counterexample, construction, or contrary theorem."
+  },
+  "review_policy": {
+    "terminal_resolution": "Only an unconditional proof or disproof of the canonical statement may set the problem to Solved, settle the opposite direction as false, trigger the solved-donor acknowledgment, or sweep the pools. An assumption written into the canonical statement is part of the statement and does not make a result conditional.",
+    "conditional_result": "A result that depends on assumptions absent from the canonical statement must name every assumption in the admin review note. It is recorded and displayed as 'Resolved under assumption: X; unconditional problem remains open,' but it is non-terminal: the problem returns to Open, the opposite direction is not settled false, and no solved-problem sweep or solved-donor acknowledgment occurs."
+  },
+  "problems": [
+    {
+      "id": "math-001",
+      "slug": "the-riemann-hypothesis",
+      "domain": "mathematics",
+      "title": "The Riemann Hypothesis",
+      "statement": "Every non-trivial zero of the Riemann zeta function ζ(s) = Σ n⁻ˢ (analytically continued) has real part exactly 1/2.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit (or prove the existence of) a zero ρ with Re(ρ) ≠ 1/2. This is disprovable-in-principle by a finite computation: a zero off the line can be certified rigorously by interval arithmetic (argument-principle counts in a box)."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 1
+      }
+    },
+    {
+      "id": "math-002",
+      "slug": "the-generalized-riemann-hypothesis-grh",
+      "domain": "mathematics",
+      "title": "The Generalized Riemann Hypothesis (GRH)",
+      "statement": "Every non-trivial zero of every Dirichlet L-function L(s, χ) has real part 1/2.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "A single off-line zero of a single L-function disproves GRH. The most-discussed candidate type is a **Siegel zero**: a real zero of L(s, χ) for a real character χ, very close to s = 1. This is a *simple* potential counterexample — one real number."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 2
+      }
+    },
+    {
+      "id": "math-003",
+      "slug": "goldbach-s-conjecture",
+      "domain": "mathematics",
+      "title": "Goldbach's Conjecture",
+      "statement": "Every even integer n ≥ 4 is the sum of two primes.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit one even number with no representation. Finite certificate: check all primes p ≤ n/2 and confirm n − p is composite each time."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 3
+      }
+    },
+    {
+      "id": "math-004",
+      "slug": "the-twin-prime-conjecture",
+      "domain": "mathematics",
+      "title": "The Twin Prime Conjecture",
+      "statement": "There are infinitely many primes p with p + 2 also prime.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Prove there is a *largest* twin prime pair. **This cannot be done by exhibiting a finite object** — no computation can disprove an infinitude statement. The contrarian direction is a finiteness theorem."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 4
+      }
+    },
+    {
+      "id": "math-005",
+      "slug": "legendre-s-conjecture",
+      "domain": "mathematics",
+      "title": "Legendre's Conjecture",
+      "statement": "For every positive integer n there is a prime p with n² < p < (n+1)².",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit an n with no prime between n² and (n+1)². Finite certificate: a primality check of ~2n numbers."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 5
+      }
+    },
+    {
+      "id": "math-006",
+      "slug": "landau-s-problem-primes-of-the-form-n2-1",
+      "domain": "mathematics",
+      "title": "Landau's Problem: Primes of the Form n² + 1",
+      "statement": "There are infinitely many primes of the form n² + 1. (Special case of the Bunyakovsky/Schinzel Hypothesis H family.)",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Prove only finitely many n² + 1 are prime. Again **no finite certificate is possible**; this direction requires a theorem."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 6
+      }
+    },
+    {
+      "id": "math-007",
+      "slug": "the-collatz-3n-1-conjecture",
+      "domain": "mathematics",
+      "title": "The Collatz (3n + 1) Conjecture",
+      "statement": "Define T(n) = n/2 for even n, 3n + 1 for odd n. For every positive integer n, iteration of T eventually reaches 1.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Two distinct finite-or-semifinite disproof types: (a) a **non-trivial cycle** — finite certificate, just list the cycle; (b) a **divergent trajectory** — no finite certificate; divergence would itself need proof."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 7
+      }
+    },
+    {
+      "id": "math-008",
+      "slug": "the-abc-conjecture",
+      "domain": "mathematics",
+      "title": "The abc Conjecture",
+      "statement": "For every ε > 0, there are only finitely many triples of coprime positive integers with a + b = c and c > rad(abc)^{1+ε}, where rad is the product of distinct prime divisors.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit, for some fixed ε > 0, an **infinite family** of coprime triples with c > rad(abc)^{1+ε}. **No single triple can disprove abc** — the statement is \"finitely many,\" so any one high-quality triple is consistent with it. This is a proof-required disproof (though an explicit parameterized family with a verified quality bound would do it)."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 8
+      }
+    },
+    {
+      "id": "math-009",
+      "slug": "odd-perfect-numbers",
+      "domain": "mathematics",
+      "title": "Odd Perfect Numbers",
+      "statement": "No odd perfect number exists (n is perfect if σ(n) = 2n).",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit one odd perfect number — a clean finite certificate."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 9
+      }
+    },
+    {
+      "id": "math-010",
+      "slug": "infinitude-of-mersenne-primes",
+      "domain": "mathematics",
+      "title": "Infinitude of Mersenne Primes",
+      "statement": "There are infinitely many primes of the form 2ᵖ − 1.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Prove there is a largest Mersenne prime. **No finite certificate possible.** Delightfully, the mirror problem is *also* open: it is not proved that infinitely many 2ᵖ − 1 (p prime) are *composite*. A contrarian could aim at either."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 10
+      }
+    },
+    {
+      "id": "math-011",
+      "slug": "fermat-primes",
+      "domain": "mathematics",
+      "title": "Fermat Primes",
+      "statement": "The only Fermat primes are F₀ = 3, F₁ = 5, F₂ = 17, F₃ = 257, and F₄ = 65537.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit a sixth Fermat prime. Finite certificate (a Pépin test run, independently checkable)."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 11
+      }
+    },
+    {
+      "id": "math-012",
+      "slug": "beal-s-conjecture",
+      "domain": "mathematics",
+      "title": "Beal's Conjecture",
+      "statement": "If Aˣ + Bʸ = Cᶻ with A, B, C positive integers, x, y, z integers ≥ 3, then A, B, C share a common prime factor.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit one coprime solution — a finite certificate anyone can verify by arithmetic."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 12
+      }
+    },
+    {
+      "id": "math-013",
+      "slug": "the-erdos-straus-conjecture",
+      "domain": "mathematics",
+      "title": "The Erdős–Straus Conjecture",
+      "statement": "For every integer n ≥ 2, the equation 4/n = 1/x + 1/y + 1/z has a solution in positive integers x, y, z.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit one n with no solution. Disproof is finitely certifiable in principle (solvability for fixed n reduces to a bounded search), though the certificate is a completeness argument, not one identity."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 13
+      }
+    },
+    {
+      "id": "math-014",
+      "slug": "sums-of-three-cubes",
+      "domain": "mathematics",
+      "title": "Sums of Three Cubes",
+      "statement": "Every integer k with k ≢ ±4 (mod 9) is expressible as x³ + y³ + z³ for some integers x, y, and z.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Prove some admissible k has no representation. **No finite certificate exists** — the search space is infinite, so a non-representability proof needs new theory (there is currently *no known obstruction* beyond the mod-9 one; proving any new obstruction would itself be a breakthrough)."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 14
+      }
+    },
+    {
+      "id": "math-015",
+      "slug": "brocard-s-problem",
+      "domain": "mathematics",
+      "title": "Brocard's Problem",
+      "statement": "The only solutions of n! + 1 = m² are (n, m) = (4, 5), (5, 11), (7, 71).",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit a fourth solution — a one-line finite certificate."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 15
+      }
+    },
+    {
+      "id": "math-016",
+      "slug": "the-birch-and-swinnerton-dyer-conjecture",
+      "domain": "mathematics",
+      "title": "The Birch and Swinnerton-Dyer Conjecture",
+      "statement": "For an elliptic curve E over ℚ, the algebraic rank of E(ℚ) equals the order of vanishing of L(E, s) at s = 1 (and the leading Taylor coefficient is given by the precise BSD formula involving Ш, regulator, Tamagawa numbers, torsion).",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit a curve where analytic rank ≠ algebraic rank, or where the leading-coefficient formula fails numerically in a certifiable way."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 16
+      }
+    },
+    {
+      "id": "math-017",
+      "slug": "the-littlewood-conjecture",
+      "domain": "mathematics",
+      "title": "The Littlewood Conjecture",
+      "statement": "For all real α, β: lim inf_{n→∞} n · ‖nα‖ · ‖nβ‖ = 0, where ‖·‖ is distance to the nearest integer.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit a specific pair (α, β) with lim inf > 0 — e.g., prove the natural candidate pair (√2, √3) fails. A disproof requires a lower-bound proof for one pair (no finite certificate)."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 17
+      }
+    },
+    {
+      "id": "math-018",
+      "slug": "normality-of",
+      "domain": "mathematics",
+      "title": "Normality of π",
+      "statement": "π is normal in every base: each block of k digits occurs with limiting frequency b⁻ᵏ.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Prove any digit-frequency anomaly — even something as weak as \"the digit 7 occurs only finitely often in the decimal expansion of π\" would be a shattering disproof. **Nothing known excludes this.** It is a genuinely open possibility, consistent with every proved theorem, that π's decimal expansion is eventually all 0s and 1s."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 18
+      }
+    },
+    {
+      "id": "math-019",
+      "slug": "irrationality-of-the-euler-mascheroni-constant",
+      "domain": "mathematics",
+      "title": "Irrationality of the Euler–Mascheroni Constant γ",
+      "statement": "The Euler–Mascheroni constant γ is irrational.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Prove γ = p/q for specific integers — a finite certificate (with a proof of the identity)."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 19
+      }
+    },
+    {
+      "id": "math-020",
+      "slug": "schanuel-s-conjecture",
+      "domain": "mathematics",
+      "title": "Schanuel's Conjecture",
+      "statement": "If z₁, …, zₙ ∈ ℂ are linearly independent over ℚ, then the field ℚ(z₁, …, zₙ, e^{z₁}, …, e^{zₙ}) has transcendence degree ≥ n over ℚ.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit an unexpected algebraic relation — the most famous concrete instances being: prove e + π is rational, or e·π is rational, or e and π are algebraically dependent. Each of these is open and none is excluded by any theorem. (It *is* known that e + π and e·π cannot both be rational — since e, π would then be algebraic — so a contrarian can have at most one of those two.)"
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 20
+      }
+    },
+    {
+      "id": "math-021",
+      "slug": "the-perfect-cuboid-problem",
+      "domain": "mathematics",
+      "title": "The Perfect Cuboid Problem",
+      "statement": "There is no rectangular box with all of: integer edge lengths a, b, c; integer face diagonals √(a²+b²), √(b²+c²), √(a²+c²); and integer space diagonal √(a²+b²+c²).",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit one — seven integers, instantly checkable."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 21
+      }
+    },
+    {
+      "id": "math-022",
+      "slug": "navier-stokes-existence-and-smoothness-clay-problem",
+      "domain": "mathematics",
+      "title": "Navier–Stokes Existence and Smoothness (Clay problem)",
+      "statement": "Every smooth, divergence-free, rapidly decaying or periodic initial datum for the three-dimensional incompressible Navier–Stokes equations gives rise to a solution that remains smooth for all time.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Construct initial data whose solution develops a singularity in finite time. This is widely considered a live possibility, not a fringe one."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 22
+      }
+    },
+    {
+      "id": "math-023",
+      "slug": "the-kakeya-conjecture-in-dimensions-4",
+      "domain": "mathematics",
+      "title": "The Kakeya Conjecture in Dimensions ≥ 4",
+      "statement": "Every Kakeya set (a compact set in ℝⁿ containing a unit line segment in every direction) has Hausdorff dimension n.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Construct a Kakeya set in some ℝⁿ, n ≥ 4, of Hausdorff dimension < n."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 23
+      }
+    },
+    {
+      "id": "math-024",
+      "slug": "the-invariant-subspace-problem-hilbert-space",
+      "domain": "mathematics",
+      "title": "The Invariant Subspace Problem (Hilbert space)",
+      "statement": "Every bounded linear operator on an infinite-dimensional separable complex Hilbert space has a non-trivial closed invariant subspace.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Construct a Hilbert-space operator with no non-trivial closed invariant subspace."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 24
+      }
+    },
+    {
+      "id": "math-025",
+      "slug": "sendov-s-conjecture",
+      "domain": "mathematics",
+      "title": "Sendov's Conjecture",
+      "statement": "If all n ≥ 2 zeros of a complex polynomial lie in the closed unit disk, then within distance 1 of each zero there is a zero of the derivative.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit one polynomial and one root violating the bound — a finite certificate (algebraic numbers, verifiable exactly)."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 25
+      }
+    },
+    {
+      "id": "math-026",
+      "slug": "crouzeix-s-conjecture",
+      "domain": "mathematics",
+      "title": "Crouzeix's Conjecture",
+      "statement": "For every square complex matrix A and every polynomial p: ‖p(A)‖ ≤ 2·max{|p(z)| : z ∈ W(A)}, where W(A) is the numerical range (field of values) of A.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit a matrix and polynomial with ratio > 2 — a finite certificate (numerical, but rigorously certifiable with interval arithmetic)."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 26
+      }
+    },
+    {
+      "id": "math-027",
+      "slug": "the-inscribed-square-problem-toeplitz-1911",
+      "domain": "mathematics",
+      "title": "The Inscribed Square Problem (Toeplitz, 1911)",
+      "statement": "Every Jordan curve (continuous simple closed curve) in the plane contains four points forming a square.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Construct one Jordan curve with no inscribed square."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 27
+      }
+    },
+    {
+      "id": "math-028",
+      "slug": "the-union-closed-sets-conjecture-frankl",
+      "domain": "mathematics",
+      "title": "The Union-Closed Sets Conjecture (Frankl)",
+      "statement": "Every finite union-closed family of sets (closed under pairwise union) other than {∅} has an element belonging to at least half of the sets.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit one finite family where every element is in fewer than half the sets — a finite certificate."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 28
+      }
+    },
+    {
+      "id": "math-029",
+      "slug": "hadwiger-s-conjecture",
+      "domain": "mathematics",
+      "title": "Hadwiger's Conjecture",
+      "statement": "For every t ≥ 1, every graph with no Kₜ minor is properly (t−1)-colorable.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit a graph with no Kₜ minor and chromatic number ≥ t — a finite certificate (though certifying \"no Kₜ minor\" and \"χ ≥ t\" are both expensive computations, they are finite)."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 29
+      }
+    },
+    {
+      "id": "math-030",
+      "slug": "the-reconstruction-conjecture-kelly-ulam",
+      "domain": "mathematics",
+      "title": "The Reconstruction Conjecture (Kelly–Ulam)",
+      "statement": "Every finite simple graph on ≥ 3 vertices is determined up to isomorphism by its deck: the multiset of vertex-deleted subgraphs.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit two non-isomorphic graphs with identical decks — a finite certificate."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 30
+      }
+    },
+    {
+      "id": "math-031",
+      "slug": "the-graceful-tree-conjecture-ringel-kotzig",
+      "domain": "mathematics",
+      "title": "The Graceful Tree Conjecture (Ringel–Kotzig)",
+      "statement": "Every tree on n vertices has a graceful labeling: an injection of vertex labels into {0, …, n−1} such that edge labels |f(u) − f(v)| are exactly {1, …, n−1}.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit one tree with no graceful labeling — finitely certifiable (exhaustive search over labelings)."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 31
+      }
+    },
+    {
+      "id": "math-032",
+      "slug": "the-lonely-runner-conjecture",
+      "domain": "mathematics",
+      "title": "The Lonely Runner Conjecture",
+      "statement": "For k runners on a unit circle with distinct constant speeds, each runner is at some time at circular distance ≥ 1/k from every other runner (equivalently, in the standard reduction: for any k−1 nonzero integer speeds, there is a time t with all speeds' positions ‖vᵢt‖ ≥ 1/k).",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit a speed vector for which some runner is never lonely. Because of the integer reduction plus known bounds, a counterexample for fixed k is finitely certifiable in principle."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 32
+      }
+    },
+    {
+      "id": "math-033",
+      "slug": "the-hadwiger-nelson-problem-chromatic-number-of-the-plane",
+      "domain": "mathematics",
+      "title": "The Hadwiger–Nelson Problem (Chromatic Number of the Plane)",
+      "statement": "In ZFC, the chromatic number of the Euclidean plane is 5.",
+      "directions": {
+        "prove": "Prove the canonical statement by combining the known lower bound with an explicit valid 5-coloring of the plane.",
+        "disprove": "Disprove the canonical statement by proving that the plane requires at least 6 colors, for example through a finite 6-chromatic unit-distance graph."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 33
+      }
+    },
+    {
+      "id": "math-034",
+      "slug": "the-sunflower-conjecture-erdos-rado",
+      "domain": "mathematics",
+      "title": "The Sunflower Conjecture (Erdős–Rado)",
+      "statement": "There is a constant C such that any family of more than Cʷ sets, each of size w, contains a 3-sunflower (three sets whose pairwise intersections all equal the common intersection).",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Construct, for every constant C, families of w-sets larger than Cʷ with no 3-sunflower. **No single finite family disproves the conjecture** — a disproof needs an infinite sequence of constructions beating every exponential base (proof-required, though an explicit construction family would do it)."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 34
+      }
+    },
+    {
+      "id": "math-035",
+      "slug": "the-erdos-szekeres-conjecture-happy-ending-problem-exact-version",
+      "domain": "mathematics",
+      "title": "The Erdős–Szekeres Conjecture (Happy Ending problem, exact version)",
+      "statement": "For every n ≥ 3, any set of 2^{n−2} + 1 points in the plane in general position contains n points in convex position — and this is sharp.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Two directions: (a) exhibit a configuration of 2^{n−2} + 1 points with no convex n-gon for some n (disproving the sufficiency) — for n = 7 this is just **33 points**, a strikingly small potential certificate; (b) improve the upper bound below 2^{n−2}+1 for some n, disproving sharpness of the known lower-bound constructions."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 35
+      }
+    },
+    {
+      "id": "math-036",
+      "slug": "the-cycle-double-cover-conjecture",
+      "domain": "mathematics",
+      "title": "The Cycle Double Cover Conjecture",
+      "statement": "Every bridgeless finite graph has a family of cycles such that every edge lies in exactly two of them.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit one bridgeless graph with no cycle double cover — a finite certificate (verification is a finite, if expensive, search)."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 36
+      }
+    },
+    {
+      "id": "math-037",
+      "slug": "the-erdos-conjecture-on-arithmetic-progressions",
+      "domain": "mathematics",
+      "title": "The Erdős Conjecture on Arithmetic Progressions",
+      "statement": "If A ⊆ ℕ has Σ_{a∈A} 1/a = ∞, then A contains arithmetic progressions of every finite length.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Construct a set with divergent reciprocal sum containing no k-term AP for some k. This would be an explicit construction plus two proofs (divergence; AP-freeness) — no single finite certificate."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 37
+      }
+    },
+    {
+      "id": "math-038",
+      "slug": "the-missing-moore-graph-degree-57",
+      "domain": "mathematics",
+      "title": "The Missing Moore Graph (degree 57)",
+      "statement": "A Moore graph of degree 57 exists; equivalently, there is a 57-regular graph on 3250 vertices with girth 5.",
+      "directions": {
+        "prove": "Prove the canonical statement by constructing such a graph and verifying its parameters.",
+        "disprove": "Disprove the canonical statement by proving that no Moore graph of degree 57 exists."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 38
+      }
+    },
+    {
+      "id": "math-039",
+      "slug": "the-hadamard-conjecture",
+      "domain": "mathematics",
+      "title": "The Hadamard Conjecture",
+      "statement": "A Hadamard matrix (±1 entries, HHᵀ = nI) exists for every order n = 4k.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Prove some specific order 4k admits no Hadamard matrix. Finitely certifiable in principle (finite search space), but infeasible; a proof would need theory."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 39
+      }
+    },
+    {
+      "id": "math-040",
+      "slug": "p-versus-np",
+      "domain": "mathematics",
+      "title": "P versus NP",
+      "statement": "P is not equal to NP.",
+      "directions": {
+        "prove": "Prove the canonical separation between deterministic polynomial time and nondeterministic polynomial time.",
+        "disprove": "Disprove the canonical statement by proving P = NP, for example by giving a polynomial-time SAT algorithm with proofs of correctness and polynomial running time."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 40
+      }
+    },
+    {
+      "id": "math-041",
+      "slug": "yang-mills-existence-and-mass-gap-clay-problem",
+      "domain": "mathematics",
+      "title": "Yang–Mills Existence and Mass Gap (Clay problem)",
+      "statement": "For every compact simple gauge group G, a non-trivial quantum Yang–Mills theory on ℝ⁴ exists at the required axiomatic rigor and has a positive mass gap.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Disprove the canonical statement by either (a) constructing the rigorous four-dimensional theory and proving that it is gapless, or (b) proving that no theory satisfying the stated axioms exists."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 41
+      }
+    },
+    {
+      "id": "math-042",
+      "slug": "the-hodge-conjecture",
+      "domain": "mathematics",
+      "title": "The Hodge Conjecture",
+      "statement": "On a smooth projective complex variety X, every rational cohomology class of type (p, p) is a ℚ-linear combination of classes of algebraic cycles.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit a variety and a Hodge class that is not algebraic (the hard part being the proof of non-algebraicity — there is no finite certificate for \"not algebraic,\" so this is proof-required)."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 42
+      }
+    },
+    {
+      "id": "math-043",
+      "slug": "the-jacobian-conjecture",
+      "domain": "mathematics",
+      "title": "The Jacobian Conjecture",
+      "statement": "Every polynomial map F: ℂⁿ → ℂⁿ whose Jacobian determinant is a nonzero constant is invertible (with polynomial inverse).",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit a non-invertible polynomial map with constant nonzero Jacobian — a finite certificate (the map's coefficients, plus a witness of non-injectivity: two points with equal image, checkable exactly)."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 43
+      }
+    },
+    {
+      "id": "math-044",
+      "slug": "kaplansky-s-zero-divisor-conjecture",
+      "domain": "mathematics",
+      "title": "Kaplansky's Zero-Divisor Conjecture",
+      "statement": "If G is a torsion-free group and K a field, the group ring K[G] has no zero divisors.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit a torsion-free group and two nonzero elements of K[G] with product zero — a finite certificate (finitely supported elements; multiplication checkable in the group)."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 44
+      }
+    },
+    {
+      "id": "math-045",
+      "slug": "the-smooth-4-dimensional-poincare-conjecture",
+      "domain": "mathematics",
+      "title": "The Smooth 4-Dimensional Poincaré Conjecture",
+      "statement": "Every smooth 4-manifold homeomorphic to S⁴ is diffeomorphic to S⁴.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit an **exotic S⁴** — a smooth manifold homeomorphic but not diffeomorphic to the 4-sphere. The manifold itself can be given by a finite handle/Kirby diagram; the hard part is proving non-diffeomorphism."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 45
+      }
+    },
+    {
+      "id": "math-046",
+      "slug": "the-slice-ribbon-conjecture",
+      "domain": "mathematics",
+      "title": "The Slice-Ribbon Conjecture",
+      "statement": "Every smoothly slice knot (bounding a smooth disk in the 4-ball) is ribbon (bounding an immersed disk in S³ with only ribbon singularities).",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit a slice knot that is not ribbon. The knot is a finite object and sliceness can be certified by an explicit disk; the obstruction — proving *non-ribbonness of a slice knot* — is the problem: **no invariant is currently known that can distinguish slice from ribbon**, so this direction awaits a new tool (again a detection limitation, not evidence)."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 46
+      }
+    },
+    {
+      "id": "math-047",
+      "slug": "the-whitehead-asphericity-conjecture",
+      "domain": "mathematics",
+      "title": "The Whitehead Asphericity Conjecture",
+      "statement": "Every connected subcomplex of an aspherical 2-dimensional CW-complex is aspherical.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit an aspherical 2-complex with a non-aspherical subcomplex."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 47
+      }
+    },
+    {
+      "id": "math-048",
+      "slug": "hilbert-s-16th-problem-second-part",
+      "domain": "mathematics",
+      "title": "Hilbert's 16th Problem (second part)",
+      "statement": "For every degree n, there is a finite uniform bound H(n) on the number of limit cycles of planar polynomial vector fields of degree at most n.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Prove that for some n there is **no uniform bound** — degree-n systems with arbitrarily many limit cycles. Note the shape of this disproof: Écalle and Ilyashenko proved every *individual* polynomial system has finitely many limit cycles, so no single system is a counterexample; a disproof requires an infinite family with cycle counts → ∞. (Scope of the finiteness theorem: it bounds each system separately, with no uniformity — it is fully consistent with H(n) = ∞ in the uniform sense.)"
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 48
+      }
+    },
+    {
+      "id": "math-049",
+      "slug": "the-casas-alvero-conjecture",
+      "domain": "mathematics",
+      "title": "The Casas-Alvero Conjecture",
+      "statement": "If a complex polynomial f of degree n shares at least one root with each of its derivatives f′, f″, …, f^{(n−1)} (each derivative separately — not necessarily the same root), then f = c(x − a)ⁿ.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit one polynomial violating this — a finite certificate in algebraic numbers, exactly verifiable."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 49
+      }
+    },
+    {
+      "id": "math-050",
+      "slug": "vaught-s-conjecture",
+      "domain": "mathematics",
+      "title": "Vaught's Conjecture",
+      "statement": "A complete first-order theory in a countable language has either at most countably many or exactly 2^{ℵ₀} non-isomorphic countable models — never an intermediate number.",
+      "directions": {
+        "prove": "Prove the canonical statement.",
+        "disprove": "Exhibit a theory with an intermediate number of countable models."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "fable-math/50-open-problems.md",
+        "entry": 50
+      }
+    },
+    {
+      "id": "cs-001",
+      "slug": "np-vs-p-poly",
+      "domain": "theoretical-computer-science",
+      "title": "NP versus P/poly",
+      "statement": "NP is not contained in P/poly; equivalently, some language in NP has no polynomial-size circuit family.",
+      "directions": {
+        "prove": "Prove the canonical statement by establishing a superpolynomial circuit lower bound for an explicit problem in NP.",
+        "disprove": "Disprove the canonical statement by proving NP is contained in P/poly."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "CS_problems.txt",
+        "entry": 1
+      }
+    },
+    {
+      "id": "cs-002",
+      "slug": "p-equals-bpp",
+      "domain": "theoretical-computer-science",
+      "title": "P versus BPP",
+      "statement": "P equals BPP; every decision problem with an efficient randomized algorithm also has an efficient deterministic algorithm.",
+      "directions": {
+        "prove": "Prove the canonical statement by derandomizing every polynomial-time randomized computation.",
+        "disprove": "Disprove the canonical statement by proving that some language lies in BPP but not in P."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "CS_problems.txt",
+        "entry": 2
+      }
+    },
+    {
+      "id": "cs-003",
+      "slug": "matrix-multiplication-exponent",
+      "domain": "algorithms",
+      "title": "Matrix Multiplication Exponent",
+      "statement": "The exponent of square matrix multiplication is 2; for every ε > 0, two n × n matrices can be multiplied using O(n^{2+ε}) arithmetic operations.",
+      "directions": {
+        "prove": "Prove the canonical statement. A strictly improved upper bound on the exponent is meaningful partial progress but does not by itself settle the conjecture.",
+        "disprove": "Disprove the canonical statement by proving an unconditional lower bound ω > 2."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "CS_problems.txt",
+        "entry": 3
+      }
+    },
+    {
+      "id": "cs-004",
+      "slug": "strongly-polynomial-linear-programming",
+      "domain": "algorithms",
+      "title": "Strongly Polynomial Linear Programming",
+      "statement": "Linear programming admits a strongly polynomial algorithm whose number of arithmetic operations is bounded by a polynomial in the number of variables and constraints, independent of the numerical bit-length of the input.",
+      "directions": {
+        "prove": "Prove the canonical statement by constructing and analyzing a strongly polynomial linear-programming algorithm.",
+        "disprove": "Disprove the canonical statement by proving that no strongly polynomial algorithm for general linear programming exists in the stated model."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "CS_problems.txt",
+        "entry": 4
+      }
+    },
+    {
+      "id": "cs-005",
+      "slug": "unique-games-conjecture",
+      "domain": "theoretical-computer-science",
+      "title": "The Unique Games Conjecture",
+      "statement": "For every ε, δ > 0, there is an alphabet size k such that it is NP-hard to distinguish Unique Games instances in which at least 1 − ε of the constraints are satisfiable from instances in which at most δ of the constraints are satisfiable.",
+      "directions": {
+        "prove": "Prove the canonical hardness statement.",
+        "disprove": "Disprove the quantified NP-hardness statement unconditionally. A polynomial-time algorithm alone does not settle the conjecture unless it is accompanied by an unconditional proof that the relevant promise problem is not NP-hard; a conclusion using P ≠ NP or any other unstated assumption is only a conditional result under the catalog review policy."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "CS_problems.txt",
+        "entry": 5
+      }
+    },
+    {
+      "id": "cs-006",
+      "slug": "metric-tsp-four-thirds-approximation",
+      "domain": "algorithms",
+      "title": "Metric TSP Approximation",
+      "statement": "Metric traveling salesperson admits a polynomial-time 4/3-approximation algorithm.",
+      "directions": {
+        "prove": "Prove the canonical statement by giving a polynomial-time algorithm with approximation ratio at most 4/3.",
+        "disprove": "Disprove the canonical statement by proving unconditionally that no polynomial-time 4/3-approximation exists. A lower bound based on P ≠ NP, the Unique Games Conjecture, or another unstated assumption is only a conditional result under the catalog review policy."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "CS_problems.txt",
+        "entry": 6
+      }
+    },
+    {
+      "id": "cs-007",
+      "slug": "dynamic-optimality",
+      "domain": "algorithms",
+      "title": "Dynamic Optimality",
+      "statement": "Splay trees are dynamically optimal: for every access sequence, their total execution cost is within a constant factor of the cost of the optimal offline binary search tree, up to the standard additive term.",
+      "directions": {
+        "prove": "Prove the canonical competitive bound for splay trees.",
+        "disprove": "Disprove the canonical statement by constructing a family of access sequences on which the ratio between splay-tree cost and optimal offline cost is unbounded."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "CS_problems.txt",
+        "entry": 7
+      }
+    },
+    {
+      "id": "cs-008",
+      "slug": "polynomial-hirsch-conjecture",
+      "domain": "algorithms",
+      "title": "The Polynomial Hirsch Conjecture",
+      "statement": "There is a polynomial p such that every d-dimensional polytope with n facets has graph diameter at most p(n, d).",
+      "directions": {
+        "prove": "Prove the canonical polynomial diameter bound.",
+        "disprove": "Disprove the canonical statement by constructing a family of polytopes whose graph diameters grow superpolynomially in their dimensions and numbers of facets."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "CS_problems.txt",
+        "entry": 8
+      }
+    },
+    {
+      "id": "cs-009",
+      "slug": "log-rank-conjecture",
+      "domain": "theoretical-computer-science",
+      "title": "The Log-Rank Conjecture",
+      "statement": "There is a constant C such that the deterministic communication complexity of every Boolean sign matrix M is at most O((log rank(M))^C), with rank taken over the real numbers.",
+      "directions": {
+        "prove": "Prove the canonical polynomial relationship between deterministic communication complexity and logarithmic rank.",
+        "disprove": "Disprove the canonical statement by constructing a family of Boolean sign matrices whose deterministic communication complexity is superpolynomial in the logarithm of their ranks."
+      },
+      "source": {
+        "kind": "repository",
+        "reference": "CS_problems.txt",
+        "entry": 9
+      }
+    }
+  ]
+}

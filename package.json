@@ -1,0 +1,14 @@
+{
+  "name": "indiemath",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "prepare": "git config core.hooksPath .githooks",
+    "test": "node --test scripts/test-*.mjs",
+    "validate": "node scripts/validate-problem-catalog.mjs"
+  }
+}
