@@ -12,11 +12,20 @@ import {
   assembleWorkerClaimContext,
   WorkerContextError,
 } from "./claim-context.mjs";
+import {
+  recoverWorkerStartup,
+  settleExpiredClaims as settleExpiredWorkerClaims,
+} from "./recovery.mjs";
 
 export {
   assembleWorkerClaimContext,
   WorkerContextError,
 } from "./claim-context.mjs";
+export {
+  ensureClaimSolutionArtifact,
+  recoverWorkerStartup,
+  settleExpiredClaims,
+} from "./recovery.mjs";
 
 export function createWorkerRuntime({
   config,
@@ -34,36 +43,57 @@ export function createWorkerRuntime({
     "streamMessage",
   ]);
 
+  const resolvePricingTable = async () => (
+    pricingTable ?? loadAnthropicPricingTable(config.pricingTablePath)
+  );
+  const runClaim = async ({ claim, contextRetryOptions, ...options } = {}) => {
+    const resolvedPricingTable = await resolvePricingTable();
+    const contextResult = await assembleContextForDispatch({
+      claim,
+      ledger,
+      r2,
+      retryOptions: contextRetryOptions,
+      signal: options.signal,
+    });
+    if (contextResult.failure) {
+      return settleContextFailure({
+        claim,
+        failure: contextResult.failure,
+        attempts: contextResult.attempts,
+        ledger,
+      });
+    }
+    return runFableClaim({
+      ...options,
+      claim,
+      ...contextResult.context,
+      messagesClient: anthropicMessages,
+      ledger,
+      r2,
+      pricingTable: resolvedPricingTable,
+    });
+  };
+
   return Object.freeze({
     name: "worker",
     workerId: config.workerId,
     config,
-    async runClaim({ claim, contextRetryOptions, ...options } = {}) {
-      const resolvedPricingTable = pricingTable
-        ?? await loadAnthropicPricingTable(config.pricingTablePath);
-      const contextResult = await assembleContextForDispatch({
-        claim,
-        ledger,
-        r2,
-        retryOptions: contextRetryOptions,
-        signal: options.signal,
-      });
-      if (contextResult.failure) {
-        return settleContextFailure({
-          claim,
-          failure: contextResult.failure,
-          attempts: contextResult.attempts,
-          ledger,
-        });
-      }
-      return runFableClaim({
+    runClaim,
+    async recoverStartup(options = {}) {
+      return recoverWorkerStartup({
         ...options,
-        claim,
-        ...contextResult.context,
-        messagesClient: anthropicMessages,
+        workerId: config.workerId,
         ledger,
         r2,
-        pricingTable: resolvedPricingTable,
+        pricingTable: await resolvePricingTable(),
+        runClaim,
+      });
+    },
+    async settleExpiredClaims(options = {}) {
+      return settleExpiredWorkerClaims({
+        ...options,
+        ledger,
+        r2,
       });
     },
     async probe() {

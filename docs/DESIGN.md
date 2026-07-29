@@ -89,14 +89,17 @@ Exactly four processes, `worker-1..4`, kept alive by any standard supervisor (sy
       (solutions/{problem}/{dir}/{claim_ts}.md). Present → the model
       solved it and I died before resolve landed: do not resume; post
       resolve with the row's spent; if status has left Open, post a
-      solution-bearing settle (secondary) instead. Stop.
+      solution-bearing settle (secondary) instead. If the artifact is
+      absent but the last immutable claim_response contains a valid
+      submit_solution, reconstruct that exact artifact from the checkpoint
+      first and perform the same resolution path. Stop.
    b. No artifact, but lease_expiry − now − buffer too short for useful
       work → settle(spent from the row) immediately; enter sampling.
    c. Otherwise resume: budget − spent from the row, hard stop at
       lease_expiry − buffer, transcript-so-far from R2 as context.
 ```
 
-No sleeps, no external reconstruction: the row's `spent` is authoritative to within one in-flight API call, and the budget headroom (§3) absorbs exactly that.
+No sleeping until lease expiry and no external spend reconstruction: the row's `spent` is authoritative to within one in-flight API call, and the budget headroom (§3) absorbs exactly that. Solution-artifact reads and writes receive only a bounded transient-failure retry; if R2 remains unavailable, recovery leaves the claim unsettled and returns an explicit retry-startup result, because settling or resuming without knowing whether the terminal artifact exists could hide a solution.
 
 Before issuing the first model request in either fresh dispatch or recovery, a `catalog-revision-mismatch` settles immediately at the claim row's current spend (zero for an unstarted claim), returns the reserved budget, and directs the worker to resample rather than running revised guidance against an old claim. A required rejection or conditional-review artifact that raises `review-artifact-unavailable` receives bounded retries for transient R2 failure; if it remains unavailable, the worker settles at the row's current spend and resamples, and it never runs with that reviewed material omitted.
 

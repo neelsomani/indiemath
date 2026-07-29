@@ -19,8 +19,17 @@ import { collectMessageStream } from "./stream.mjs";
 import { DEFAULT_MAX_TOKENS } from "./constants.mjs";
 
 const CONTINUATION_CONTEXT_CHARACTER_LIMIT = 200_000;
-const DEFAULT_HARD_STOP_BUFFER_MS = 5 * 60 * 1_000;
+export const DEFAULT_HARD_STOP_BUFFER_MS = 5 * 60 * 1_000;
 const STREAM_FLUSH_EVENT_COUNT = 25;
+
+export class WorkerProcessCrashError extends Error {
+  constructor(boundary, options) {
+    super(`Simulated worker process death at ${boundary}.`, options);
+    this.name = "WorkerProcessCrashError";
+    this.boundary = boundary;
+    this.retryable = false;
+  }
+}
 
 export async function runFableClaim({
   claim: suppliedClaim,
@@ -44,6 +53,7 @@ export async function runFableClaim({
   onText = () => {},
   onRetry = () => {},
   onObserverError = () => {},
+  onBoundary = () => {},
   retryOptions = {},
 } = {}) {
   const claimKey = parseClaimKey(suppliedClaim);
@@ -66,6 +76,9 @@ export async function runFableClaim({
   if (!retryOptions || typeof retryOptions !== "object" || Array.isArray(retryOptions)) {
     throw new TypeError("retryOptions must be an object.");
   }
+  if (typeof onBoundary !== "function") {
+    throw new TypeError("onBoundary must be a function.");
+  }
   const effectiveMaxTokens = maxTokens ?? DEFAULT_MAX_TOKENS;
   assertRequestFitsHeadroom({
     maxTokens: effectiveMaxTokens,
@@ -74,6 +87,13 @@ export async function runFableClaim({
 
   let claim = await ledger.getClaim(claimKey);
   let checkpoints = [...await ledger.listClaimResponses(claimKey)];
+  const settleClaim = (solutionUri) => settleCurrentClaim({
+    ledger,
+    r2,
+    claimKey,
+    solutionUri,
+    onBoundary,
+  });
   await mirrorCheckpoints({ r2, claim: claimKey, checkpoints });
   if (claim.settled) {
     return terminalResult("already_settled", claim, checkpoints);
@@ -87,10 +107,11 @@ export async function runFableClaim({
       solution: priorTerminal.solution,
       ledger,
       r2,
+      onBoundary,
     });
   }
   if (priorTerminal.kind === "refusal") {
-    const settledClaim = await settleCurrentClaim({ ledger, claimKey });
+    const settledClaim = await settleClaim();
     return terminalResult("refusal", settledClaim, checkpoints);
   }
 
@@ -125,18 +146,18 @@ export async function runFableClaim({
     const now = clock();
     const hardStopMs = Date.parse(claim.leaseExpiresAt) - hardStopBufferMs;
     if (!Number.isFinite(hardStopMs) || now >= hardStopMs) {
-      const settledClaim = await settleCurrentClaim({ ledger, claimKey });
+      const settledClaim = await settleClaim();
       return terminalResult("lease_hard_stop", settledClaim, checkpoints);
     }
     const currentProblem = await ledger.getProblem(claim.problemId);
     if (currentProblem.status !== "Open") {
-      const settledClaim = await settleCurrentClaim({ ledger, claimKey });
+      const settledClaim = await settleClaim();
       return terminalResult("problem_no_longer_open", settledClaim, checkpoints);
     }
     const remainingCents = claim.budgetCents - claim.spentCents;
     if (remainingCents <= pricingTable.one_request_headroom_cents) {
       await persistContinuationContext({ r2, claim: claimKey, checkpoints });
-      const settledClaim = await settleCurrentClaim({ ledger, claimKey });
+      const settledClaim = await settleClaim();
       return terminalResult("budget_headroom", settledClaim, checkpoints);
     }
 
@@ -167,9 +188,14 @@ export async function runFableClaim({
             });
           }
           requestStartedAt = new Date(clock()).toISOString();
+          await reachBoundary(onBoundary, "before_anthropic_request", {
+            claim: claimKey,
+            attempt,
+            requestStartedAt,
+          });
           const streamed = { attempt, events: [] };
           streamAttempts.push(streamed);
-          return collectMessageStream(
+          const collected = await collectMessageStream(
             messagesClient.streamMessage(request, { signal: requestSignal }),
             {
               async onEvent(event) {
@@ -192,7 +218,14 @@ export async function runFableClaim({
                       sequence: checkpoints.length + 1,
                       streamAttempts,
                     });
+                    await reachBoundary(onBoundary, "after_r2_partial_mirror", {
+                      claim: claimKey,
+                      sequence: checkpoints.length + 1,
+                      attempt,
+                      eventType: event.type,
+                    });
                   } catch (error) {
+                    if (error instanceof WorkerProcessCrashError) throw error;
                     await notifyObserverError(
                       onObserverError,
                       error,
@@ -210,6 +243,12 @@ export async function runFableClaim({
               },
             },
           );
+          await reachBoundary(onBoundary, "after_anthropic_response", {
+            claim: claimKey,
+            attempt,
+            messageId: collected.id,
+          });
+          return collected;
         },
         {
           ...retryOptions,
@@ -231,15 +270,16 @@ export async function runFableClaim({
         },
       );
     } catch (error) {
+      if (error instanceof WorkerProcessCrashError) throw error;
       if (error instanceof ProblemClosedDuringRunError) {
-        const settledClaim = await settleCurrentClaim({ ledger, claimKey });
+        const settledClaim = await settleClaim();
         return terminalResult("problem_no_longer_open", settledClaim, checkpoints);
       }
       if (clock() >= hardStopMs || isDeadlineAbort(error)) {
-        const settledClaim = await settleCurrentClaim({ ledger, claimKey });
+        const settledClaim = await settleClaim();
         return terminalResult("lease_hard_stop", settledClaim, checkpoints);
       }
-      const settledClaim = await settleCurrentClaim({ ledger, claimKey });
+      const settledClaim = await settleClaim();
       return terminalResult(
         signal?.aborted ? "aborted" : "persistent_api_failure",
         settledClaim,
@@ -272,6 +312,11 @@ export async function runFableClaim({
     } else if (!checkpoints.some((row) => row.messageId === response.id)) {
       checkpoints = [...await ledger.listClaimResponses(claimKey)];
     }
+    await reachBoundary(onBoundary, "after_ledger_checkpoint", {
+      claim: claimKey,
+      checkpoint: checkpoint.response,
+      checkpointOutcome: checkpoint.outcome,
+    });
     await mirrorCheckpoint({
       r2,
       claim: claimKey,
@@ -280,6 +325,10 @@ export async function runFableClaim({
       streamAttempts,
     });
     await persistContinuationContext({ r2, claim: claimKey, checkpoints });
+    await reachBoundary(onBoundary, "after_r2_checkpoint_mirror", {
+      claim: claimKey,
+      checkpoint: checkpoint.response,
+    });
     container = checkpoint.response.containerId ?? container;
 
     const terminal = terminalAction(response);
@@ -290,10 +339,11 @@ export async function runFableClaim({
         solution: terminal.solution,
         ledger,
         r2,
+        onBoundary,
       });
     }
     if (terminal.kind === "refusal") {
-      const settledClaim = await settleCurrentClaim({ ledger, claimKey });
+      const settledClaim = await settleClaim();
       return terminalResult("refusal", settledClaim, checkpoints);
     }
     if (hasCompaction(response)) {
@@ -305,7 +355,7 @@ export async function runFableClaim({
         });
       } catch (error) {
         if (!(error instanceof ProblemClosedDuringRunError)) throw error;
-        const settledClaim = await settleCurrentClaim({ ledger, claimKey });
+        const settledClaim = await settleClaim();
         return terminalResult(
           "problem_no_longer_open",
           settledClaim,
@@ -409,6 +459,7 @@ async function finalizeSolution({
   solution,
   ledger,
   r2,
+  onBoundary,
 }) {
   const key = solutionKey(claim);
   const artifact = renderSolutionArtifact({
@@ -430,6 +481,10 @@ async function finalizeSolution({
     },
   });
   const solutionUri = r2ArtifactUri(key);
+  await reachBoundary(onBoundary, "after_r2_solution_write", {
+    claim,
+    solutionUri,
+  });
   let resolution;
   try {
     resolution = await ledger.resolve({
@@ -440,19 +495,27 @@ async function finalizeSolution({
       finalSpentCents: claim.spentCents,
       solutionUri,
     });
+    await reachBoundary(onBoundary, "after_ledger_resolve", {
+      claim: resolution.claim,
+      solutionUri,
+      resolutionOutcome: resolution.outcome,
+    });
   } catch (error) {
+    if (error instanceof WorkerProcessCrashError) throw error;
     if (!["resolve-race-lost", "claim-settled", "lease-expired"].includes(error?.code)) {
       throw error;
     }
     resolution = {
       claim: await settleCurrentClaim({
         ledger,
+        r2,
         claimKey: {
           problemId: claim.problemId,
           direction: claim.direction,
           claimTs: claim.claimTs,
         },
         solutionUri,
+        onBoundary,
       }),
     };
   }
@@ -771,17 +834,45 @@ async function requireProblemOpen({ ledger, problemId, boundary }) {
   return problem;
 }
 
-async function settleCurrentClaim({ ledger, claimKey, solutionUri }) {
+async function settleCurrentClaim({
+  ledger,
+  r2,
+  claimKey,
+  solutionUri,
+  onBoundary,
+}) {
   const current = await ledger.getClaim(claimKey);
-  if (current.settled && (!solutionUri || current.solutionUri === solutionUri)) {
+  let terminalUri = solutionUri;
+  if (!terminalUri && await objectExists(r2, solutionKey(claimKey))) {
+    terminalUri = r2ArtifactUri(solutionKey(claimKey));
+  }
+  if (current.settled && (!terminalUri || current.solutionUri === terminalUri)) {
     return current;
   }
+  await reachBoundary(onBoundary, "before_ledger_settle", {
+    claim: current,
+    solutionUri: terminalUri,
+  });
   const settlement = await ledger.settle({
     ...claimKey,
     finalSpentCents: current.spentCents,
-    ...(solutionUri ? { solutionUri } : {}),
+    ...(terminalUri ? { solutionUri: terminalUri } : {}),
+  });
+  await reachBoundary(onBoundary, "after_ledger_settle", {
+    claim: settlement.claim,
+    solutionUri: terminalUri,
+    settlementOutcome: settlement.outcome,
   });
   return settlement.claim;
+}
+
+async function reachBoundary(callback, name, details) {
+  try {
+    await callback(Object.freeze({ name, ...details }));
+  } catch (error) {
+    if (error instanceof WorkerProcessCrashError) throw error;
+    throw new WorkerProcessCrashError(name, { cause: error });
+  }
 }
 
 function hasCompaction(response) {

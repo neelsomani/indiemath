@@ -1703,6 +1703,16 @@ export class SQLiteLedger {
     return this.#mapClaim(this.#requireClaim(parseClaimKey(key)));
   }
 
+  getWorkerUnsettledClaim(workerId) {
+    this.#assertOpen();
+    const parsedWorkerId = parseWorkerId(workerId);
+    const row = this.#database.prepare(`
+      SELECT * FROM claims
+      WHERE worker_id = ? AND settled = 0
+    `).get(parsedWorkerId);
+    return row ? this.#mapClaim(row) : undefined;
+  }
+
   listUnsettledClaims() {
     this.#assertOpen();
     return this.#database.prepare(`
