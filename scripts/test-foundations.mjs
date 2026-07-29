@@ -18,6 +18,7 @@ import {
   parseClaim,
   parseDollarAmount,
   parseDonation,
+  parseFrontendConfig,
   parseReviewedResult,
   parseWorkerConfig,
   rawTranscriptKey,
@@ -275,19 +276,12 @@ test("artifact keys are centralized, exact, and path-safe", () => {
   );
 });
 
-test("worker configuration rejects missing, duplicate, and cross-assigned keys", () => {
+test("worker configuration rejects missing and duplicate keys", () => {
   const configs = WORKER_IDS.map((workerId, index) => parseWorkerConfig(
     fakeWorkerEnvironment(workerId, index + 1),
   ));
   assert.equal(validateWorkerFleet(configs).length, 4);
 
-  assert.throws(
-    () => parseWorkerConfig({
-      ...fakeWorkerEnvironment("worker-1", 1),
-      ANTHROPIC_API_KEY_OWNER: "worker-2",
-    }),
-    /cross-assigned/,
-  );
   assert.throws(
     () => parseWorkerConfig({
       ...fakeWorkerEnvironment("worker-1", 1),
@@ -317,6 +311,42 @@ test("worker configuration rejects missing, duplicate, and cross-assigned keys",
       assert.doesNotMatch(error.message, /same-secret/);
       return true;
     },
+  );
+
+  const defaultedPaths = parseWorkerConfig({
+    ...fakeWorkerEnvironment("worker-1", 1),
+    INDIEMATH_CATALOG: undefined,
+    INDIEMATH_PRICING_TABLE: undefined,
+  });
+  assert.equal(
+    defaultedPaths.catalogPath,
+    path.join(rootDir, "problems", "catalog.json"),
+  );
+  assert.equal(
+    defaultedPaths.pricingTablePath,
+    path.join(rootDir, "pricing", "anthropic.json"),
+  );
+});
+
+test("frontend derives its fixed public object URLs from one base URL", () => {
+  const config = parseFrontendConfig({
+    INDIEMATH_RUNTIME: "fake",
+    PUBLIC_DATA_BASE_URL: "https://public.example.test/artifacts",
+  });
+  assert.equal(
+    config.stateUrl,
+    "https://public.example.test/artifacts/public/state.json",
+  );
+  assert.equal(
+    config.ledgerUrl,
+    "https://public.example.test/artifacts/public/ledger.json",
+  );
+  assert.throws(
+    () => parseFrontendConfig({
+      INDIEMATH_RUNTIME: "fake",
+      PUBLIC_DATA_BASE_URL: "https://public.example.test/?version=1",
+    }),
+    /must not contain a query or fragment/,
   );
 });
 
@@ -415,6 +445,14 @@ test("the business terms remain reachable as a page and footer modal", async () 
     termsHtml,
     /Lipschitz Strategies LLC, the operator of and counterparty for the IndieMath service/,
   );
+  assert.match(
+    termsHtml,
+    /processes contributions within 1&ndash;2 business days after receipt; for this policy, business days are Monday through Friday/,
+  );
+  assert.match(
+    indexHtml,
+    /processed within 1&ndash;2 business days after receipt \(Monday through Friday\)/,
+  );
 });
 
 test("the repository workflow enforces the complete foundation suite", async () => {
@@ -439,7 +477,6 @@ function fakeWorkerEnvironment(workerId, keyNumber) {
     R2_BUCKET: "indiemath-fake",
     WORKER_ID: workerId,
     ANTHROPIC_API_KEY_ID: `key-fake-${keyNumber}`,
-    ANTHROPIC_API_KEY_OWNER: workerId,
   };
 }
 
@@ -455,7 +492,6 @@ function productionWorkerEnvironment(workerId, keyNumber, apiKey) {
     R2_SECRET_ACCESS_KEY: `r2-secret-${keyNumber}`,
     WORKER_ID: workerId,
     ANTHROPIC_API_KEY_ID: `key-production-${keyNumber}`,
-    ANTHROPIC_API_KEY_OWNER: workerId,
     ANTHROPIC_API_KEY: apiKey,
   };
 }

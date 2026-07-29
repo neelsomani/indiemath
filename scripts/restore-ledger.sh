@@ -2,33 +2,20 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 <r2|secondary> <new-destination.sqlite> [timestamp]" >&2
+  echo "Usage: $0 <new-destination.sqlite> [timestamp]" >&2
 }
 
-if [[ "$#" -lt 2 || "$#" -gt 3 ]]; then
+if [[ "$#" -lt 1 || "$#" -gt 2 ]]; then
   usage
   exit 2
 fi
 
-replica_name="$1"
-destination="$2"
-restore_timestamp="${3:-}"
+destination="$1"
+restore_timestamp="${2:-}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd -- "${script_dir}/.." && pwd)"
 litestream_bin="${LITESTREAM_BIN:-litestream}"
-
-case "${replica_name}" in
-  r2)
-    config_path="${repo_dir}/ops/litestream-r2.yml"
-    ;;
-  secondary)
-    config_path="${repo_dir}/ops/litestream-secondary-aws.yml"
-    ;;
-  *)
-    usage
-    exit 2
-    ;;
-esac
+config_path="${repo_dir}/ops/litestream-r2.yml"
 
 if [[ -z "${INDIEMATH_DB_PATH:-}" ]]; then
   echo "INDIEMATH_DB_PATH must name the database represented by the replica." >&2
@@ -72,4 +59,4 @@ restore_arguments+=("${INDIEMATH_DB_PATH}")
 "${litestream_bin}" "${restore_arguments[@]}"
 node "${script_dir}/verify-ledger-restore.mjs" "${staged_database}"
 mv -- "${staged_database}" "${destination}"
-echo "Restored ${replica_name} replica to ${destination}"
+echo "Restored R2 replica to ${destination}"

@@ -1,4 +1,9 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  publicLedgerKey,
+  publicStateKey,
+} from "./artifact-keys.mjs";
 import {
   parsePositiveInteger,
   parseWorkerId,
@@ -6,6 +11,16 @@ import {
 } from "./identifiers.mjs";
 
 export const RUNTIMES = Object.freeze(["fake", "production"]);
+const repositoryRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../..",
+);
+const defaultCatalogPath = path.join(repositoryRoot, "problems", "catalog.json");
+const defaultPricingTablePath = path.join(
+  repositoryRoot,
+  "pricing",
+  "anthropic.json",
+);
 
 export function parseLedgerConfig(environment) {
   const runtime = parseRuntime(environment);
@@ -22,19 +37,9 @@ export function parseLedgerConfig(environment) {
 export function parseWorkerConfig(environment) {
   const runtime = parseRuntime(environment);
   const workerId = parseWorkerId(required(environment, "WORKER_ID"), "WORKER_ID");
-  const apiKeyOwner = parseWorkerId(
-    required(environment, "ANTHROPIC_API_KEY_OWNER"),
-    "ANTHROPIC_API_KEY_OWNER",
-  );
-  if (apiKeyOwner !== workerId) {
-    throw new Error(
-      `ANTHROPIC_API_KEY_OWNER ${apiKeyOwner} is cross-assigned to ${workerId}.`,
-    );
-  }
 
   const anthropic = {
     apiKeyId: required(environment, "ANTHROPIC_API_KEY_ID"),
-    apiKeyOwner,
   };
   if (runtime === "production") {
     anthropic.apiKey = required(environment, "ANTHROPIC_API_KEY");
@@ -51,11 +56,11 @@ export function parseWorkerConfig(environment) {
       "INDIEMATH_DB",
     ),
     catalogPath: parseAbsolutePath(
-      required(environment, "INDIEMATH_CATALOG"),
+      environment.INDIEMATH_CATALOG?.trim() || defaultCatalogPath,
       "INDIEMATH_CATALOG",
     ),
     pricingTablePath: parseAbsolutePath(
-      required(environment, "INDIEMATH_PRICING_TABLE"),
+      environment.INDIEMATH_PRICING_TABLE?.trim() || defaultPricingTablePath,
       "INDIEMATH_PRICING_TABLE",
     ),
     r2: parseR2Config(environment, runtime),
@@ -84,9 +89,7 @@ export function parseIntakePublisherConfig(environment) {
 
 export function parseAdminConfig(environment) {
   const runtime = parseRuntime(environment);
-  const admin = {
-    organizationId: required(environment, "ANTHROPIC_ORGANIZATION_ID"),
-  };
+  const admin = {};
   if (runtime === "production") {
     admin.apiKey = required(environment, "ANTHROPIC_ADMIN_API_KEY");
   } else {
@@ -101,7 +104,7 @@ export function parseAdminConfig(environment) {
       "INDIEMATH_DB",
     ),
     catalogPath: parseAbsolutePath(
-      required(environment, "INDIEMATH_CATALOG"),
+      environment.INDIEMATH_CATALOG?.trim() || defaultCatalogPath,
       "INDIEMATH_CATALOG",
     ),
     r2: parseR2Config(environment, runtime),
@@ -112,17 +115,16 @@ export function parseAdminConfig(environment) {
 
 export function parseFrontendConfig(environment) {
   const runtime = parseRuntime(environment);
+  const publicDataBaseUrl = parseHttpUrl(
+    required(environment, "PUBLIC_DATA_BASE_URL"),
+    "PUBLIC_DATA_BASE_URL",
+  );
   return Object.freeze({
     component: "frontend",
     runtime,
-    stateUrl: parseHttpUrl(
-      required(environment, "PUBLIC_STATE_URL"),
-      "PUBLIC_STATE_URL",
-    ),
-    ledgerUrl: parseHttpUrl(
-      required(environment, "PUBLIC_LEDGER_URL"),
-      "PUBLIC_LEDGER_URL",
-    ),
+    publicDataBaseUrl,
+    stateUrl: appendUrlPath(publicDataBaseUrl, publicStateKey()),
+    ledgerUrl: appendUrlPath(publicDataBaseUrl, publicLedgerKey()),
   });
 }
 
@@ -135,11 +137,6 @@ export function validateWorkerFleet(configs, { requireComplete = true } = {}) {
   for (const [index, config] of configs.entries()) {
     if (!config || config.component !== "worker") {
       throw new TypeError(`Worker fleet entry ${index} is not a parsed worker config.`);
-    }
-    if (config.anthropic.apiKeyOwner !== config.workerId) {
-      throw new Error(
-        `Anthropic key ${config.anthropic.apiKeyId} is cross-assigned to ${config.workerId}.`,
-      );
     }
     recordUnique(workerIds, config.workerId, "worker ID");
     recordUnique(apiKeyIds, config.anthropic.apiKeyId, "Anthropic API key ID");
@@ -256,6 +253,15 @@ function parseHttpUrl(value, label) {
   if (!["http:", "https:"].includes(url.protocol)) {
     throw new TypeError(`${label} must use http or https.`);
   }
+  return url.toString();
+}
+
+function appendUrlPath(baseUrl, objectKey) {
+  const url = new URL(baseUrl);
+  if (url.search || url.hash) {
+    throw new TypeError("PUBLIC_DATA_BASE_URL must not contain a query or fragment.");
+  }
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}/${objectKey}`;
   return url.toString();
 }
 

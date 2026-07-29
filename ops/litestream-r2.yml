@@ -1,5 +1,5 @@
-# Litestream v0.5 supports one replica per database. This configuration is run
-# alongside litestream-secondary-aws.yml by scripts/replicate-ledger.sh.
+# Litestream's driver name for Cloudflare R2 is "s3"; this configuration has
+# only one destination, the R2 bucket below.
 snapshot:
   interval: 1h
   retention: 168h

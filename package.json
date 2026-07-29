@@ -20,6 +20,7 @@
     "check": "node scripts/check-foundations.mjs",
     "prepare": "git config core.hooksPath .githooks",
     "test": "node --test scripts/test-*.mjs",
+    "test:anthropic-live": "INDIEMATH_RUN_LIVE_ANTHROPIC=confirmed node --env-file=.env --test scripts/test-anthropic-live.mjs",
     "validate": "node scripts/validate-problem-catalog.mjs"
   }
 }

@@ -9,15 +9,14 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const [area, command, ...args] = process.argv.slice(2);
 
 try {
-  if (area !== "catalog") usage("Expected the catalog command group.");
-
   const options = parseOptions(args);
-  const catalogPath = resolveFromRoot(options.catalog ?? "problems/catalog.json");
   const databasePath = resolveFromRoot(
     options.db ?? process.env.INDIEMATH_DB ?? "data/indiemath.sqlite",
   );
 
-  switch (command) {
+  if (area === "catalog") {
+    const catalogPath = resolveFromRoot(options.catalog ?? "problems/catalog.json");
+    switch (command) {
     case "validate": {
       rejectUnknownOptions(options, ["catalog"]);
       const catalog = validateCatalog(await readCatalog(catalogPath));
@@ -63,6 +62,68 @@ try {
 
     default:
       usage(`Unknown catalog command: ${command ?? "<missing>"}.`);
+    }
+  } else if (area === "anthropic" && command === "reconcile") {
+    rejectUnknownOptions(options, [
+      "api-key-id",
+      "base-url",
+      "claim-ts",
+      "db",
+      "direction",
+      "pricing",
+      "problem",
+      "tolerance-cents",
+    ]);
+    for (const option of ["api-key-id", "claim-ts", "direction", "problem"]) {
+      if (!options[option]) usage(`anthropic reconcile requires --${option}.`);
+    }
+    const adminApiKey = process.env.ANTHROPIC_ADMIN_API_KEY;
+    if (!adminApiKey) {
+      usage("ANTHROPIC_ADMIN_API_KEY is required for anthropic reconcile.");
+    }
+    const [
+      { AnthropicAdminClient, loadAnthropicPricingTable, runClaimUsageReconciliation },
+      { openLedger },
+    ] = await Promise.all([
+      import("#indiemath/anthropic"),
+      import("#indiemath/ledger"),
+    ]);
+    const ledger = await openLedger({ databasePath });
+    try {
+      const claim = ledger.getClaim({
+        problemId: options.problem,
+        direction: options.direction,
+        claimTs: parsePositiveInteger(options["claim-ts"], "--claim-ts"),
+      });
+      const pricingTable = await loadAnthropicPricingTable(resolveFromRoot(
+        options.pricing ?? "pricing/anthropic.json",
+      ));
+      const adminClient = new AnthropicAdminClient({
+        apiKey: adminApiKey,
+        ...(options["base-url"] ? { baseUrl: options["base-url"] } : {}),
+      });
+      const result = await runClaimUsageReconciliation({
+        ledger,
+        adminClient,
+        claim,
+        apiKeyId: options["api-key-id"],
+        pricingTable,
+        ...(options["tolerance-cents"]
+          ? {
+              toleranceCents: parseNonnegativeInteger(
+                options["tolerance-cents"],
+                "--tolerance-cents",
+              ),
+            }
+          : {}),
+      });
+      console.log(JSON.stringify(result, null, 2));
+      if (result.alert) process.exitCode = 1;
+    } finally {
+      ledger.close();
+    }
+  } else {
+    usage(`Unknown command group or command: ${area ?? "<missing>"} ${command ?? ""}.`);
   }
 } catch (error) {
   console.error(error.message);
@@ -99,6 +160,22 @@ function resolveFromRoot(value) {
   return path.isAbsolute(value) ? value : path.resolve(rootDir, value);
 }
 
+function parsePositiveInteger(value, label) {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    usage(`${label} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function parseNonnegativeInteger(value, label) {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    usage(`${label} must be a nonnegative integer.`);
+  }
+  return parsed;
+}
+
 function usage(message) {
   if (message) console.error(message);
   console.error(`
@@ -107,6 +184,9 @@ Usage:
   ./indiemath catalog sync [--catalog <path>] [--db <path>]
   ./indiemath catalog status [--db <path>]
   ./indiemath catalog export --output <path> [--db <path>]
+  ANTHROPIC_ADMIN_API_KEY=... ./indiemath anthropic reconcile \\
+    --problem <id> --direction <prove|disprove> --claim-ts <epoch-ms> \\
+    --api-key-id <id> [--db <path>] [--pricing <path>] [--tolerance-cents <n>]
 `.trim());
   process.exit(2);
 }

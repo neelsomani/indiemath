@@ -17,15 +17,35 @@ export class FakeAnthropicMessages {
 
   async *streamMessage(request) {
     const response = this.#respond(request);
-    yield { type: "message_start", message: { ...response, content: [] } };
+    yield {
+      type: "transport_start",
+      request_id: `req_${response.id}`,
+    };
+    yield {
+      type: "message_start",
+      message: {
+        ...response,
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: {
+          input_tokens: response.usage?.input_tokens ?? 0,
+          cache_creation_input_tokens:
+            response.usage?.cache_creation_input_tokens ?? 0,
+          cache_read_input_tokens: response.usage?.cache_read_input_tokens ?? 0,
+          output_tokens: 0,
+        },
+      },
+    };
     for (const [index, block] of response.content.entries()) {
-      yield { type: "content_block_start", index, content_block: structuredClone(block) };
-      if (block.type === "text") {
-        yield {
-          type: "content_block_delta",
-          index,
-          delta: { type: "text_delta", text: block.text },
-        };
+      const { start, deltas } = streamBlock(block);
+      yield {
+        type: "content_block_start",
+        index,
+        content_block: start,
+      };
+      for (const delta of deltas) {
+        yield { type: "content_block_delta", index, delta };
       }
       yield { type: "content_block_stop", index };
     }
@@ -58,6 +78,55 @@ export class FakeAnthropicMessages {
       },
     });
   }
+}
+
+function streamBlock(block) {
+  const cloned = structuredClone(block);
+  if (block.type === "text") {
+    return {
+      start: { ...cloned, text: "" },
+      deltas: [{ type: "text_delta", text: block.text ?? "" }],
+    };
+  }
+  if (block.type === "tool_use") {
+    return {
+      start: { ...cloned, input: {} },
+      deltas: [{
+        type: "input_json_delta",
+        partial_json: JSON.stringify(block.input ?? {}),
+      }],
+    };
+  }
+  if (block.type === "thinking") {
+    return {
+      start: { ...cloned, thinking: "", signature: "" },
+      deltas: [
+        { type: "thinking_delta", thinking: block.thinking ?? "" },
+        ...(block.signature
+          ? [{ type: "signature_delta", signature: block.signature }]
+          : []),
+      ],
+    };
+  }
+  if (block.type === "compaction") {
+    return {
+      start: {
+        ...cloned,
+        content: "",
+        ...(Object.hasOwn(block, "encrypted_content")
+          ? { encrypted_content: "" }
+          : {}),
+      },
+      deltas: [{
+        type: "compaction_delta",
+        content: block.content ?? "",
+        ...(typeof block.encrypted_content === "string"
+          ? { encrypted_content: block.encrypted_content }
+          : {}),
+      }],
+    };
+  }
+  return { start: cloned, deltas: [] };
 }
 
 function validateRequest(request) {

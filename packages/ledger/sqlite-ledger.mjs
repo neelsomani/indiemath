@@ -177,7 +177,7 @@ export class SQLiteLedger {
     direction,
     runBudgetCents,
     workerId,
-    fundingMode = "pool-first",
+    fundingMode = "pool-only",
   }) {
     const parsedProblemId = parseProblemId(problemId);
     const parsedDirection = parseDirection(direction);
@@ -334,6 +334,137 @@ export class SQLiteLedger {
         `).run(clamped, key.problemId, key.direction, key.claimTs);
       }
       return this.#mapClaim(this.#requireClaim(key));
+    });
+  }
+
+  checkpointResponse({
+    problemId,
+    direction,
+    claimTs,
+    request,
+    response,
+    requestId,
+    requestStartedAt,
+    costCents,
+  }) {
+    const key = parseClaimKey({ problemId, direction, claimTs });
+    const parsedResponse = parseCheckpointResponse(response);
+    const parsedRequest = parseCheckpointRequest(request);
+    const parsedRequestId = optionalNonemptyString(requestId, "requestId");
+    const parsedRequestStartedAt = requiredTimestamp(
+      requestStartedAt,
+      "requestStartedAt",
+    );
+    const pricedCost = asCents(costCents, "costCents");
+    const responseJson = canonicalJson(parsedResponse);
+    const requestJson = canonicalJson(parsedRequest);
+    const usageJson = canonicalJson(parsedResponse.usage);
+    const stopDetailsJson = parsedResponse.stop_details === undefined
+      || parsedResponse.stop_details === null
+      ? null
+      : canonicalJson(parsedResponse.stop_details);
+    const containerId = containerIdFromResponse(parsedResponse);
+
+    return this.#transaction(() => {
+      const existing = this.#database.prepare(`
+        SELECT * FROM claim_responses WHERE message_id = ?
+      `).get(parsedResponse.id);
+      if (existing) {
+        if (
+          existing.problem_id !== key.problemId
+          || existing.direction !== key.direction
+          || Number(existing.claim_ts) !== key.claimTs
+          || existing.request_id !== (parsedRequestId ?? null)
+          || existing.request_started_at !== parsedRequestStartedAt
+          || existing.response_json !== responseJson
+          || existing.request_json !== requestJson
+          || Number(existing.priced_cost_cents) !== pricedCost
+        ) {
+          throw new LedgerError(
+            "idempotency-conflict",
+            `Anthropic message ${parsedResponse.id} was already checkpointed with different values.`,
+          );
+        }
+        return Object.freeze({
+          outcome: "duplicate",
+          claim: this.#mapClaim(this.#requireClaim(key)),
+          response: mapClaimResponse(existing),
+        });
+      }
+
+      const claim = this.#requireClaim(key);
+      if (Number(claim.settled) === 1) {
+        throw new LedgerError(
+          "claim-settled",
+          "Cannot checkpoint a response against a settled claim.",
+        );
+      }
+      const current = Number(claim.spent_cents);
+      const remaining = Number(claim.budget_cents) - current;
+      const appliedCost = Math.min(pricedCost, remaining);
+      const overage = pricedCost - appliedCost;
+      const sequence = Number(this.#database.prepare(`
+        SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence
+        FROM claim_responses
+        WHERE problem_id = ? AND direction = ? AND claim_ts = ?
+      `).get(key.problemId, key.direction, key.claimTs).sequence);
+      const now = this.#now().iso;
+
+      this.#database.prepare(`
+        INSERT INTO claim_responses (
+          problem_id,
+          direction,
+          claim_ts,
+          sequence,
+          message_id,
+          request_id,
+          model_id,
+          stop_reason,
+          stop_details_json,
+          container_id,
+          usage_json,
+          request_json,
+          response_json,
+          priced_cost_cents,
+          applied_cost_cents,
+          overage_cents,
+          request_started_at,
+          completed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        key.problemId,
+        key.direction,
+        key.claimTs,
+        sequence,
+        parsedResponse.id,
+        parsedRequestId ?? null,
+        parsedResponse.model,
+        parsedResponse.stop_reason ?? null,
+        stopDetailsJson,
+        containerId ?? null,
+        usageJson,
+        requestJson,
+        responseJson,
+        pricedCost,
+        appliedCost,
+        overage,
+        parsedRequestStartedAt,
+        now,
+      );
+      if (appliedCost > 0) {
+        this.#database.prepare(`
+          UPDATE claims SET spent_cents = spent_cents + ?
+          WHERE problem_id = ? AND direction = ? AND claim_ts = ?
+        `).run(appliedCost, key.problemId, key.direction, key.claimTs);
+      }
+      const stored = this.#database.prepare(`
+        SELECT * FROM claim_responses WHERE message_id = ?
+      `).get(parsedResponse.id);
+      return Object.freeze({
+        outcome: "checkpointed",
+        claim: this.#mapClaim(this.#requireClaim(key)),
+        response: mapClaimResponse(stored),
+      });
     });
   }
 
@@ -1058,6 +1189,11 @@ export class SQLiteLedger {
     ));
   }
 
+  getProblem(problemId) {
+    this.#assertOpen();
+    return mapProblem(this.#requireProblem(parseProblemId(problemId)));
+  }
+
   getClaim(key) {
     this.#assertOpen();
     return this.#mapClaim(this.#requireClaim(parseClaimKey(key)));
@@ -1069,6 +1205,40 @@ export class SQLiteLedger {
       SELECT * FROM claims WHERE settled = 0
       ORDER BY problem_id, direction, claim_ts
     `).all().map((row) => this.#mapClaim(row));
+  }
+
+  listClaimResponses(key) {
+    this.#assertOpen();
+    const parsed = parseClaimKey(key);
+    this.#requireClaim(parsed);
+    return Object.freeze(this.#database.prepare(`
+      SELECT * FROM claim_responses
+      WHERE problem_id = ? AND direction = ? AND claim_ts = ?
+      ORDER BY sequence
+    `).all(parsed.problemId, parsed.direction, parsed.claimTs).map(mapClaimResponse));
+  }
+
+  listWorkerClaimResponses({
+    workerId,
+    startTime,
+    endTime,
+  }) {
+    this.#assertOpen();
+    const parsedWorkerId = parseWorkerId(workerId);
+    const start = requiredTimestamp(startTime, "startTime");
+    const end = requiredTimestamp(endTime, "endTime");
+    if (Date.parse(start) >= Date.parse(end)) {
+      throw new RangeError("startTime must be before endTime.");
+    }
+    return Object.freeze(this.#database.prepare(`
+      SELECT claim_responses.*, claims.worker_id
+      FROM claim_responses
+      JOIN claims USING (problem_id, direction, claim_ts)
+      WHERE claims.worker_id = ?
+        AND claim_responses.request_started_at >= ?
+        AND claim_responses.request_started_at < ?
+      ORDER BY claim_responses.request_started_at, claim_responses.message_id
+    `).all(parsedWorkerId, start, end).map(mapClaimResponse));
   }
 
   inspect() {
@@ -1094,6 +1264,10 @@ export class SQLiteLedger {
     const claims = this.#database.prepare(
       "SELECT * FROM claims ORDER BY claim_ts",
     ).all().map((row) => this.#mapClaim(row));
+    const claimResponses = this.#database.prepare(`
+      SELECT * FROM claim_responses
+      ORDER BY problem_id, direction, claim_ts, sequence
+    `).all().map(mapClaimResponse);
     const reviewedResults = this.#database.prepare(
       "SELECT * FROM reviewed_results ORDER BY reviewed_at, problem_id, direction",
     ).all().map((row) => this.#mapReviewedResult(row));
@@ -1108,6 +1282,7 @@ export class SQLiteLedger {
       pools: Object.freeze(pools),
       donations: Object.freeze(donations),
       claims: Object.freeze(claims),
+      claimResponses: Object.freeze(claimResponses),
       reviewedResults: Object.freeze(reviewedResults),
       fundingEvents: Object.freeze(fundingEvents),
       adjustments: Object.freeze(adjustments),
@@ -1935,6 +2110,110 @@ function mapAdjustment(row) {
     createdAt: row.created_at,
     resolvedAt: row.resolved_at ?? undefined,
   });
+}
+
+function mapClaimResponse(row) {
+  return Object.freeze({
+    problemId: row.problem_id,
+    direction: row.direction,
+    claimTs: Number(row.claim_ts),
+    sequence: Number(row.sequence),
+    messageId: row.message_id,
+    requestId: row.request_id ?? undefined,
+    modelId: row.model_id,
+    stopReason: row.stop_reason ?? undefined,
+    stopDetails: row.stop_details_json
+      ? JSON.parse(row.stop_details_json)
+      : undefined,
+    containerId: row.container_id ?? undefined,
+    usage: JSON.parse(row.usage_json),
+    request: JSON.parse(row.request_json),
+    response: JSON.parse(row.response_json),
+    pricedCostCents: Number(row.priced_cost_cents),
+    appliedCostCents: Number(row.applied_cost_cents),
+    overageCents: Number(row.overage_cents),
+    workerId: row.worker_id ?? undefined,
+    requestStartedAt: row.request_started_at,
+    completedAt: row.completed_at,
+  });
+}
+
+function parseCheckpointResponse(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("response must be an Anthropic message object.");
+  }
+  const id = requiredString(value.id, "response.id");
+  const model = requiredString(value.model, "response.model");
+  if (!Array.isArray(value.content)) {
+    throw new TypeError("response.content must be an array.");
+  }
+  if (!value.usage || typeof value.usage !== "object" || Array.isArray(value.usage)) {
+    throw new TypeError("response.usage must be an object.");
+  }
+  return structuredClone({
+    ...value,
+    id,
+    model,
+    content: value.content,
+    usage: value.usage,
+  });
+}
+
+function parseCheckpointRequest(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("request must be an Anthropic Messages request object.");
+  }
+  if (typeof value.model !== "string" || !value.model.trim()) {
+    throw new TypeError("request.model must be a nonempty string.");
+  }
+  if (!Array.isArray(value.messages)) {
+    throw new TypeError("request.messages must be an array.");
+  }
+  return structuredClone(value);
+}
+
+function containerIdFromResponse(response) {
+  if (typeof response.container === "string" && response.container.trim()) {
+    return response.container.trim();
+  }
+  if (
+    response.container
+    && typeof response.container === "object"
+    && typeof response.container.id === "string"
+    && response.container.id.trim()
+  ) {
+    return response.container.id.trim();
+  }
+  return undefined;
+}
+
+function optionalNonnegativeInteger(value, label) {
+  if (value === undefined || value === null) return undefined;
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${label} must be a nonnegative safe integer.`);
+  }
+  return value;
+}
+
+function requiredTimestamp(value, label) {
+  const text = requiredString(value, label);
+  const timestamp = Date.parse(text);
+  if (!Number.isFinite(timestamp)) {
+    throw new TypeError(`${label} must be a valid timestamp.`);
+  }
+  return new Date(timestamp).toISOString();
+}
+
+function canonicalJson(value) {
+  return JSON.stringify(sortJson(value));
+}
+
+function sortJson(value) {
+  if (Array.isArray(value)) return value.map(sortJson);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.keys(value).sort().map((key) => [key, sortJson(value[key])]),
+  );
 }
 
 function sameDestination(row, destination) {

@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "pricing_version": "anthropic-2026-06-09-global",
+  "effective_at": "2026-06-09T00:00:00Z",
+  "currency": "USD",
+  "safety_margin_basis_points": 300,
+  "one_request_headroom_cents": 1600,
+  "models": {
+    "claude-fable-5": {
+      "uncached_input_cents_per_million_tokens": 1000,
+      "cache_write_5m_cents_per_million_tokens": 1250,
+      "cache_write_1h_cents_per_million_tokens": 2000,
+      "cache_read_cents_per_million_tokens": 100,
+      "output_cents_per_million_tokens": 5000
+    }
+  },
+  "server_tools": {
+    "web_search_cents_per_thousand_requests": 1000,
+    "web_fetch_cents_per_thousand_requests": 0,
+    "code_execution_additional_cost": "free_when_web_fetch_20260209_or_later_is_in_the_request"
+  },
+  "request_profile": {
+    "inference_geo": "global",
+    "service_tier": "standard",
+    "default_max_output_tokens": 64000,
+    "headroom_input_allowance_tokens": 600000,
+    "compaction_trigger_tokens": 150000,
+    "code_execution_tool": "code_execution_20260521",
+    "web_fetch_tool": "web_fetch_20260318"
+  },
+  "sources": [
+    "https://platform.claude.com/docs/en/about-claude/pricing",
+    "https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool"
+  ]
+}

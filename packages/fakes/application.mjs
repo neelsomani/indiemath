@@ -70,7 +70,6 @@ export async function createFakeApplication() {
       ...commonEnvironment(),
       INDIEMATH_CATALOG: `${FAKE_ROOT}/catalog.json`,
       OPEN_COLLECTIVE_SLUG: "indiemath-fake",
-      ANTHROPIC_ORGANIZATION_ID: "org_fake",
     }),
     ledger,
     r2,
@@ -80,8 +79,7 @@ export async function createFakeApplication() {
   const frontend = createFrontendRuntime({
     config: parseFrontendConfig({
       INDIEMATH_RUNTIME: "fake",
-      PUBLIC_STATE_URL: `${FAKE_PUBLIC_ORIGIN}state.json`,
-      PUBLIC_LEDGER_URL: `${FAKE_PUBLIC_ORIGIN}ledger.json`,
+      PUBLIC_DATA_BASE_URL: FAKE_PUBLIC_ORIGIN,
     }),
     publicData,
   });
@@ -134,7 +132,6 @@ function fakeWorkerEnvironment(workerId, keyNumber) {
     INDIEMATH_CATALOG: `${FAKE_ROOT}/catalog.json`,
     INDIEMATH_PRICING_TABLE: `${FAKE_ROOT}/pricing.json`,
     ANTHROPIC_API_KEY_ID: `key_fake_${keyNumber}`,
-    ANTHROPIC_API_KEY_OWNER: workerId,
   };
 }
 

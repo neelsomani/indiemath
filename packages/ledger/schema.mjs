@@ -1,4 +1,4 @@
-export const LEDGER_SCHEMA_VERSION = 3;
+export const LEDGER_SCHEMA_VERSION = 5;
 
 export function configureLedgerConnection(database) {
   database.exec(`
@@ -161,6 +161,38 @@ export function initializeLedgerSchema(database) {
       ON claims(problem_id, direction) WHERE settled = 0;
     CREATE UNIQUE INDEX IF NOT EXISTS claims_one_unsettled_worker
       ON claims(worker_id) WHERE settled = 0;
+
+    CREATE TABLE IF NOT EXISTS claim_responses (
+      problem_id TEXT NOT NULL,
+      direction TEXT NOT NULL CHECK (direction IN ('prove', 'disprove')),
+      claim_ts INTEGER NOT NULL CHECK (claim_ts > 0),
+      sequence INTEGER NOT NULL CHECK (sequence > 0),
+      message_id TEXT NOT NULL UNIQUE,
+      request_id TEXT,
+      model_id TEXT NOT NULL,
+      stop_reason TEXT,
+      stop_details_json TEXT,
+      container_id TEXT,
+      usage_json TEXT NOT NULL,
+      request_json TEXT NOT NULL,
+      response_json TEXT NOT NULL,
+      priced_cost_cents INTEGER NOT NULL CHECK (priced_cost_cents >= 0),
+      applied_cost_cents INTEGER NOT NULL CHECK (applied_cost_cents >= 0),
+      overage_cents INTEGER NOT NULL CHECK (overage_cents >= 0),
+      request_started_at TEXT NOT NULL,
+      completed_at TEXT NOT NULL,
+      PRIMARY KEY (problem_id, direction, claim_ts, sequence),
+      FOREIGN KEY (problem_id, direction, claim_ts)
+        REFERENCES claims(problem_id, direction, claim_ts),
+      CHECK (priced_cost_cents = applied_cost_cents + overage_cents)
+    );
+
+    CREATE INDEX IF NOT EXISTS claim_responses_claim
+      ON claim_responses(problem_id, direction, claim_ts, sequence);
+    CREATE INDEX IF NOT EXISTS claim_responses_request
+      ON claim_responses(request_id);
+    CREATE INDEX IF NOT EXISTS claim_responses_started
+      ON claim_responses(request_started_at);
 
     CREATE TABLE IF NOT EXISTS reviewed_results (
       problem_id TEXT NOT NULL,

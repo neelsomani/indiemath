@@ -1,4 +1,7 @@
 .DS_Store
+/.env
+/.env.*
+!/.env.example
 DEVELOPMENT_AGENDA.md
 fable-math/
 /gather-review-context.sh

@@ -293,6 +293,42 @@ test("unprocessed balances cannot be claimed using another pool's capacity", asy
   );
 });
 
+test("claims default to pool-only and require an explicit general-credit mode", async (context) => {
+  const fixture = await createFixture(context);
+  fixture.ledger.donate({
+    dedupId: "transaction-general-default",
+    orderId: "order-general-default",
+    destination: { kind: "general" },
+    grossCents: 5_000,
+    feesCents: 0,
+    netCents: 5_000,
+    donorTag: "Grace",
+    creditedAt: "2026-07-28T01:00:00.000Z",
+  });
+  fixture.ledger.treasuryFund({
+    amountCents: 5_000,
+    externalReference: "fund-general-default",
+    settledContributionCents: 5_000,
+  });
+
+  assert.throws(() => fixture.ledger.claim({
+    problemId: firstProblem.id,
+    direction: "prove",
+    runBudgetCents: 5_000,
+    workerId: "worker-1",
+  }), /Claimable pool balance 0/);
+
+  const claim = fixture.ledger.claim({
+    problemId: firstProblem.id,
+    direction: "prove",
+    runBudgetCents: 5_000,
+    workerId: "worker-1",
+    fundingMode: "general-only",
+  });
+  assert.equal(claim.poolFundedCents, 0);
+  fixture.ledger.assertConservation();
+});
+
 test("resolve, competing solutions, conditional review, and unconditional sweep preserve money", async (context) => {
   const fixture = await createFixture(context);
   donate(fixture.ledger, {
@@ -887,25 +923,33 @@ test("concurrent refund and treasury commands have exactly one winner", async (c
   fixture.ledger.assertConservation();
 });
 
-test("replication assets define two independent replicas and a restore drill", async () => {
-  const [r2Config, secondaryConfig, replicationScript, restoreScript] =
-    await Promise.all([
+test("replication assets define the R2 replica and its restore drill", async () => {
+  const [
+    r2Config,
+    replicationScript,
+    restoreScript,
+    setupWrapper,
+    setupImplementation,
+  ] = await Promise.all([
     readFile(path.join(rootDir, "ops", "litestream-r2.yml"), "utf8"),
-    readFile(path.join(rootDir, "ops", "litestream-secondary-aws.yml"), "utf8"),
     readFile(path.join(rootDir, "scripts", "replicate-ledger.sh"), "utf8"),
     readFile(path.join(rootDir, "scripts", "restore-ledger.sh"), "utf8"),
+    readFile(path.join(rootDir, "setup-litestream.sh"), "utf8"),
+    readFile(path.join(rootDir, "scripts", "setup-litestream.mjs"), "utf8"),
   ]);
   assert.match(r2Config, /meta-path:.*\/r2/);
   assert.match(r2Config, /R2_REPLICA_BUCKET/);
   assert.match(r2Config, /r2\.cloudflarestorage\.com|R2_ENDPOINT/);
-  assert.match(secondaryConfig, /meta-path:.*\/secondary-aws/);
-  assert.match(secondaryConfig, /SECONDARY_AWS_REPLICA_BUCKET/);
   assert.match(replicationScript, /litestream-r2\.yml/);
-  assert.match(replicationScript, /litestream-secondary-aws\.yml/);
-  assert.match(replicationScript, /wait -n/);
+  assert.doesNotMatch(replicationScript, /SECONDARY_|secondary-/);
   assert.match(restoreScript, /restore_arguments=\(/);
   assert.match(restoreScript, /integrity-check full/);
   assert.match(restoreScript, /verify-ledger-restore\.mjs/);
+  assert.doesNotMatch(restoreScript, /secondary|SECONDARY_/);
+  assert.match(setupWrapper, /--env-file-if-exists=/);
+  assert.match(setupImplementation, /\/etc\/indiemath\/litestream\.env/);
+  assert.match(setupImplementation, /atomicWrite\(environmentPath, environmentBody, 0o600\)/);
+  assert.match(setupImplementation, /\["enable", "--now", "indiemath-litestream\.service"\]/);
 });
 
 test("the restore verifier accepts an exact closed-ledger copy", async (context) => {

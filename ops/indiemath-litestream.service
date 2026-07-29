@@ -1,5 +1,5 @@
 [Unit]
-Description=IndieMath dual-vendor SQLite replication
+Description=IndieMath SQLite replication to Cloudflare R2
 After=network-online.target
 Wants=network-online.target
 

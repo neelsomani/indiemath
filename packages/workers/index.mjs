@@ -2,12 +2,17 @@ import {
   assertPort,
   assertRuntimeConfig,
 } from "#indiemath/shared";
+import {
+  loadAnthropicPricingTable,
+  runFableClaim,
+} from "#indiemath/anthropic";
 
 export function createWorkerRuntime({
   config,
   ledger,
   r2,
   anthropicMessages,
+  pricingTable,
 }) {
   assertRuntimeConfig(config, "worker");
   assertPort(ledger, "ledger", ["healthcheck"]);
@@ -22,6 +27,17 @@ export function createWorkerRuntime({
     name: "worker",
     workerId: config.workerId,
     config,
+    async runClaim(options) {
+      const resolvedPricingTable = pricingTable
+        ?? await loadAnthropicPricingTable(config.pricingTablePath);
+      return runFableClaim({
+        ...options,
+        messagesClient: anthropicMessages,
+        ledger,
+        r2,
+        pricingTable: resolvedPricingTable,
+      });
+    },
     async probe() {
       const [ledgerStatus, objectStoreStatus, messagesStatus] = await Promise.all([
         ledger.healthcheck(),
