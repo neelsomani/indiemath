@@ -3,10 +3,21 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "imports": {
+    "#indiemath/admin-cli": "./packages/admin-cli/index.mjs",
+    "#indiemath/anthropic": "./packages/anthropic/index.mjs",
+    "#indiemath/fakes": "./packages/fakes/index.mjs",
+    "#indiemath/frontend": "./packages/frontend/index.mjs",
+    "#indiemath/intake-publisher": "./packages/intake-publisher/index.mjs",
+    "#indiemath/ledger": "./packages/ledger/index.mjs",
+    "#indiemath/shared": "./packages/shared/index.mjs",
+    "#indiemath/workers": "./packages/workers/index.mjs"
+  },
   "engines": {
     "node": ">=22.13"
   },
   "scripts": {
+    "check": "node scripts/check-foundations.mjs",
     "prepare": "git config core.hooksPath .githooks",
     "test": "node --test scripts/test-*.mjs",
     "validate": "node scripts/validate-problem-catalog.mjs"

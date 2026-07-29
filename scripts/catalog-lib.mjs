@@ -1,9 +1,16 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import {
+  PROBLEM_ID_MAX_LENGTH,
+  PROBLEM_ID_MIN_LENGTH,
+  PROBLEM_ID_PATTERN,
+} from "../packages/shared/identifiers.mjs";
 
-export const PROBLEM_ID_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
-export const PROBLEM_ID_MIN_LENGTH = 3;
-export const PROBLEM_ID_MAX_LENGTH = 64;
+export {
+  PROBLEM_ID_MAX_LENGTH,
+  PROBLEM_ID_MIN_LENGTH,
+  PROBLEM_ID_PATTERN,
+};
 export const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const SLUG_MAX_LENGTH = 120;
 export const SOURCE_KINDS = new Set(["repository", "url", "admin"]);
