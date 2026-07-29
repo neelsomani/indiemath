@@ -453,7 +453,19 @@ test("the deployment runs exactly four supervised workers with isolated credenti
   assert.match(service, /^Restart=always$/m);
   assert.match(service, /^NoNewPrivileges=true$/m);
   assert.match(service, /^ProtectSystem=strict$/m);
-  assert.match(bootstrap, /--env-file-if-exists="\$\{env_file\}"/);
+  assert.match(
+    bootstrap,
+    /INDIEMATH_WORKER_ENV_FILE:-\/etc\/indiemath\/workers\.env/,
+  );
+  assert.match(
+    bootstrap,
+    /--env-file-if-exists="\$\{common_env_file\}"/,
+  );
+  assert.match(
+    bootstrap,
+    /--env-file-if-exists="\$\{worker_env_file\}"/,
+  );
+  assert.match(setup, /process\.env\.INDIEMATH_WORKER_ENV_FILE/);
   assert.match(setup, /validateWorkerFleet\(workerEnvironments\.map\(parseWorkerConfig\)\)/);
   assert.match(setup, /mode: 0o700/);
   assert.match(setup, /0o600/);

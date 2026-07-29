@@ -30,7 +30,9 @@ Usage: sudo ./setup-workers.sh [--check]
 
 Validates four unique worker API keys from the protected IndieMath environment.
 Without --check, writes one root-only environment per worker, installs the
-systemd template, and enables and restarts all four workers.
+systemd template, and enables and restarts all four workers. Common service
+settings load from /etc/indiemath/indiemath.env; the four staging secrets load
+only from /etc/indiemath/workers.env.
 `.trim());
   process.exit(0);
 }
@@ -49,6 +51,15 @@ const environmentPath = absolutePath(
 const environmentStat = await stat(environmentPath).catch(() => undefined);
 if (!environmentStat?.isFile()) {
   fail(`Worker environment file does not exist: ${environmentPath}.`);
+}
+const workerEnvironmentPath = absolutePath(
+  process.env.INDIEMATH_WORKER_ENV_FILE ?? "/etc/indiemath/workers.env",
+  "INDIEMATH_WORKER_ENV_FILE",
+);
+const workerEnvironmentStat = await stat(workerEnvironmentPath)
+  .catch(() => undefined);
+if (!workerEnvironmentStat?.isFile()) {
+  fail(`Worker credential file does not exist: ${workerEnvironmentPath}.`);
 }
 const workerEnvironments = WORKER_IDS.map(workerEnvironment);
 validateWorkerFleet(workerEnvironments.map(parseWorkerConfig));
