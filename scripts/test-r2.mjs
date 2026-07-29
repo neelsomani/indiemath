@@ -22,6 +22,12 @@ test("R2 client signs and round-trips worker artifacts through the production po
     });
     const key = decodeURIComponent(url.pathname.replace(/^\/stage7-bucket\/?/, ""));
     if (init.method === "PUT") {
+      if (headers.get("if-none-match") === "*" && objects.has(key)) {
+        return new Response(
+          "<Error><Code>PreconditionFailed</Code><Message>exists</Message></Error>",
+          { status: 412 },
+        );
+      }
       objects.set(key, {
         body: new Uint8Array(init.body),
         contentType: headers.get("content-type"),
@@ -83,6 +89,13 @@ test("R2 client signs and round-trips worker artifacts through the production po
     metadata: { state: "completed" },
   }), { etag: "put-etag" });
   assert.equal(calls[0].headers.get("cache-control"), "public, max-age=60");
+  await assert.rejects(
+    client.putObject(key, "Must not replace.", { ifNoneMatch: true }),
+    (error) => error instanceof R2Error
+      && error.code === "PreconditionFailed"
+      && error.status === 412,
+  );
+  assert.equal(calls[1].headers.get("if-none-match"), "*");
   const object = await client.getObject(key);
   assert.equal(await object.text(), "Readable output.");
   assert.equal(object.metadata.state, "completed");

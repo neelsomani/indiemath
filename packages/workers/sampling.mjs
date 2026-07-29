@@ -211,6 +211,7 @@ export async function runWorkerLoop({
   draw = secureDraw,
   idlePollIntervalMs = WORKER_IDLE_POLL_INTERVAL_MS,
   sleep = waitForNextSamplingCycle,
+  clock,
   signal,
   onState = () => {},
 } = {}) {
@@ -239,6 +240,8 @@ export async function runWorkerLoop({
   }
   if (typeof sleep !== "function") throw new TypeError("sleep must be a function.");
   if (typeof onState !== "function") throw new TypeError("onState must be a function.");
+  const loopClock = clock ?? runOptions.clock ?? recoveryOptions.clock ?? (() => Date.now());
+  if (typeof loopClock !== "function") throw new TypeError("clock must be a function.");
 
   let startupRequired = true;
   while (!signal?.aborted) {
@@ -247,6 +250,7 @@ export async function runWorkerLoop({
         ...recoveryOptions,
         ...(artifactRetryOptions ? { artifactRetryOptions } : {}),
         runOptions,
+        clock: loopClock,
       });
       await onState(Object.freeze({
         event: "worker-startup-recovery",
@@ -265,6 +269,7 @@ export async function runWorkerLoop({
       ledger,
       draw,
       artifactRetryOptions,
+      clock: loopClock,
     });
     await onState(Object.freeze({
       event: "worker-sampling-cycle",
@@ -276,6 +281,7 @@ export async function runWorkerLoop({
       const result = await worker.runClaim({
         ...runOptions,
         claim: cycle.claim,
+        clock: loopClock,
       });
       await onState(Object.freeze({
         event: "worker-claim-finished",

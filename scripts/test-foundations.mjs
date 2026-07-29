@@ -446,18 +446,24 @@ test("every component starts and probes against fakes without production credent
 });
 
 test("the business terms remain reachable as a page and footer modal", async () => {
-  const [indexHtml, termsHtml] = await Promise.all([
+  const [indexHtml, ledgerHtml, termsHtml, termsCss, termsScript] = await Promise.all([
     readFile(path.join(rootDir, "index.html"), "utf8"),
+    readFile(path.join(rootDir, "ledger.html"), "utf8"),
     readFile(path.join(rootDir, "terms.html"), "utf8"),
+    readFile(path.join(rootDir, "assets", "terms.css"), "utf8"),
+    readFile(path.join(rootDir, "assets", "terms.js"), "utf8"),
   ]);
-  assert.match(indexHtml, /href="terms\.html" id="terms-link"/);
-  assert.match(indexHtml, /<dialog id="terms-dialog"/);
+  assert.match(indexHtml, /href="terms\.html" data-terms-link/);
+  assert.match(indexHtml, /class="terms-dialog" id="terms-dialog"/);
   assert.match(indexHtml, /src="terms\.html\?embedded=1"/);
+  assert.match(ledgerHtml, /href="terms\.html" data-terms-link/);
+  assert.match(ledgerHtml, /class="terms-dialog" id="terms-dialog"/);
   assert.match(
     indexHtml,
     /href="https:\/\/github\.com\/neelsomani\/indiemath"[^>]+aria-label="View IndieMath on GitHub"/,
   );
-  assert.match(termsHtml, /body\.embedded \.back-link/);
+  assert.match(termsCss, /body\.embedded \.back-link/);
+  assert.match(termsScript, /URLSearchParams\(window\.location\.search\)/);
   for (const requiredSection of [
     "Business and service",
     "Refund policy and process",
@@ -479,7 +485,7 @@ test("the business terms remain reachable as a page and footer modal", async () 
   );
   assert.match(
     indexHtml,
-    /processed within 1&ndash;2 business days after receipt \(Monday through Friday\)/,
+    /processed within 1–2 business days after receipt \(Monday through Friday\)/,
   );
 });
 

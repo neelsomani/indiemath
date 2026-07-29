@@ -27,6 +27,9 @@ export {
   settleExpiredClaims,
 } from "./recovery.mjs";
 export {
+  bootstrapFableMathContexts,
+} from "./fable-context-bootstrap.mjs";
+export {
   runSamplingCycle,
   runWorkerLoop,
   samplingPairKey,

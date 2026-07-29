@@ -567,6 +567,7 @@ export function openCollectiveCheckoutUrl({
   collectiveSlug,
   tierSlug,
   legacyId,
+  amountCents = 5_000,
 }) {
   const collective = encodeURIComponent(requiredString(
     collectiveSlug,
@@ -576,7 +577,14 @@ export function openCollectiveCheckoutUrl({
   const suffix = legacyId === undefined || legacyId === null
     ? slug
     : `${slug}-${positiveInteger(legacyId, "legacyId")}`;
-  return `${OPEN_COLLECTIVE_ORIGIN}/${collective}/contribute/${suffix}/checkout`;
+  const amount = positiveInteger(amountCents, "amountCents") / 100;
+  const url = new URL(
+    `${OPEN_COLLECTIVE_ORIGIN}/${collective}/contribute/${suffix}/checkout`,
+  );
+  url.searchParams.set("interval", "oneTime");
+  url.searchParams.set("amount", String(amount));
+  url.searchParams.set("contributeAs", "me");
+  return url.toString();
 }
 
 function normalizeTierSpecification(specification) {
@@ -685,6 +693,7 @@ function normalizeTier(tier, collectiveSlug) {
       collectiveSlug,
       tierSlug: slug,
       legacyId,
+      amountCents: minimumAmountCents || 5_000,
     }),
   });
 }

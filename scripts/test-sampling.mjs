@@ -413,6 +413,7 @@ test("the worker loop recovers, claims, runs, and returns to an idle sampling st
     draw: () => 0,
     artifactRetryOptions: noDelayRetry,
     idlePollIntervalMs: 1,
+    clock: fixture.clock,
     signal: controller.signal,
     onState: async (state) => states.push(state),
     sleep: async () => controller.abort(),
@@ -466,7 +467,10 @@ test("the deployment runs exactly four supervised workers with isolated credenti
     /--env-file-if-exists="\$\{worker_env_file\}"/,
   );
   assert.match(setup, /process\.env\.INDIEMATH_WORKER_ENV_FILE/);
-  assert.match(setup, /validateWorkerFleet\(workerEnvironments\.map\(parseWorkerConfig\)\)/);
+  assert.match(setup, /validateWorkerFleet\(workerConfigs\)/);
+  assert.match(setup, /await bootstrapFableMathContexts\(/);
+  assert.match(setup, /createR2Client\(\{ config: workerConfigs\[0\] \}\)/);
+  assert.match(setup, /skipped \$\{fableBootstrap\.skippedExisting\} existing/);
   assert.match(setup, /mode: 0o700/);
   assert.match(setup, /0o600/);
   assert.match(setup, /for \(const workerId of WORKER_IDS\)/);

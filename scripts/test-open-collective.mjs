@@ -28,6 +28,7 @@ import {
   runStripeDisputeIntakeOnce,
 } from "#indiemath/intake-publisher";
 import {
+  openCollectiveCheckoutUrl,
   OpenCollectiveGraphQLClient,
 } from "#indiemath/open-collective";
 import { StripeClient } from "#indiemath/stripe";
@@ -42,6 +43,18 @@ const catalog = validateCatalog(
   await readCatalog(path.join(rootDir, "problems", "catalog.json")),
 );
 const firstProblem = catalog.problems[0];
+
+test("checkout links default to a one-time $50 personal contribution", () => {
+  assert.equal(
+    openCollectiveCheckoutUrl({
+      collectiveSlug: "indiemath",
+      tierSlug: "cs-001-prove-prove-np-versus-p-poly",
+      legacyId: 104341,
+      amountCents: 5_000,
+    }),
+    "https://opencollective.com/indiemath/contribute/cs-001-prove-prove-np-versus-p-poly-104341/checkout?interval=oneTime&amount=50&contributeAs=me",
+  );
+});
 
 test("catalog-driven tier sync creates exactly one flexible $50 tier per pair", async (context) => {
   const fixture = await createFixture(context);

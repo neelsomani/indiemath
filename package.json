@@ -20,7 +20,10 @@
     "node": ">=22.13"
   },
   "scripts": {
+    "build": "node scripts/build-site.mjs",
     "check": "node scripts/check-foundations.mjs",
+    "dev": "node scripts/serve-site.mjs",
+    "import:fable-math": "node scripts/import-fable-math-results.mjs",
     "prepare": "git config core.hooksPath .githooks",
     "test": "node --test scripts/test-*.mjs",
     "test:anthropic-live": "INDIEMATH_RUN_LIVE_ANTHROPIC=confirmed node --env-file=.env --test scripts/test-anthropic-live.mjs",

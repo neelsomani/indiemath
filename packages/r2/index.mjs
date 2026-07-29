@@ -49,7 +49,11 @@ export class R2Client {
     contentType = "application/octet-stream",
     cacheControl,
     metadata = {},
+    ifNoneMatch = false,
   } = {}) {
+    if (typeof ifNoneMatch !== "boolean") {
+      throw new TypeError("ifNoneMatch must be a boolean.");
+    }
     const bytes = toBytes(body);
     const response = await this.#request("PUT", parseKey(key), {
       body: bytes,
@@ -58,6 +62,7 @@ export class R2Client {
         ...(cacheControl
           ? { "cache-control": requiredString(cacheControl, "cacheControl") }
           : {}),
+        ...(ifNoneMatch ? { "if-none-match": "*" } : {}),
         ...metadataHeaders(metadata),
       },
     });

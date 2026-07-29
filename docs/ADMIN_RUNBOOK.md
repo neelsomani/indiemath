@@ -4,6 +4,11 @@ All commands run on the deployment host from `/opt/indiemath/current`. The
 protected service environment must provide `INDIEMATH_DB`,
 `STRIPE_SECRET_KEY`, and `STRIPE_ACCOUNT_ID`.
 
+`sudo ./setup-workers.sh` also seeds any missing pre-IndieMath FableMath
+carry-forward contexts before restarting workers. It uses conditional R2
+writes, so rerunning setup skips existing keys and never replaces context
+created by a worker.
+
 ## Refunds before treasury funding
 
 Use this order every time funds are staged for compute:

@@ -2,9 +2,13 @@
 /.env
 /.env.*
 !/.env.example
+/.openai/
 DEVELOPMENT_AGENDA.md
 fable-math/
+!seed/fable-math/
+!seed/fable-math/**
 /gather-review-context.sh
 /llm-review.txt
 /data/
+/dist/
 /ops/litestream.env

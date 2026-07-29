@@ -19,6 +19,8 @@ import {
   validateWorkerFleet,
   WORKER_IDS,
 } from "#indiemath/shared";
+import { createR2Client } from "#indiemath/r2";
+import { bootstrapFableMathContexts } from "#indiemath/workers";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const arguments_ = new Set(process.argv.slice(2));
@@ -29,10 +31,11 @@ if (arguments_.has("--help")) {
 Usage: sudo ./setup-workers.sh [--check]
 
 Validates four unique worker API keys from the protected IndieMath environment.
-Without --check, writes one root-only environment per worker, installs the
-systemd template, and enables and restarts all four workers. Common service
-settings load from /etc/indiemath/indiemath.env; the four staging secrets load
-only from /etc/indiemath/workers.env.
+Without --check, seeds missing FableMath carry-forward context without
+overwriting existing worker context, writes one root-only environment per
+worker, installs the systemd template, and enables and restarts all four
+workers. Common service settings load from /etc/indiemath/indiemath.env; the
+four staging secrets load only from /etc/indiemath/workers.env.
 `.trim());
   process.exit(0);
 }
@@ -62,9 +65,26 @@ if (!workerEnvironmentStat?.isFile()) {
   fail(`Worker credential file does not exist: ${workerEnvironmentPath}.`);
 }
 const workerEnvironments = WORKER_IDS.map(workerEnvironment);
-validateWorkerFleet(workerEnvironments.map(parseWorkerConfig));
+const workerConfigs = workerEnvironments.map(parseWorkerConfig);
+validateWorkerFleet(workerConfigs);
 console.log("Validated four unique IndieMath worker identities and Anthropic keys.");
 if (checkOnly) process.exit(0);
+
+const fableSeedDirectory = path.join(rootDir, "seed", "fable-math");
+const fableManifest = JSON.parse(
+  await readFile(path.join(fableSeedDirectory, "manifest.json"), "utf8"),
+);
+const fableBootstrap = await bootstrapFableMathContexts({
+  r2: createR2Client({ config: workerConfigs[0] }),
+  manifest: fableManifest,
+  loadArtifact: (artifact) => (
+    readFile(path.join(fableSeedDirectory, artifact), "utf8")
+  ),
+});
+console.log(
+  `FableMath carry-forward context: seeded ${fableBootstrap.seeded}; `
+    + `skipped ${fableBootstrap.skippedExisting} existing.`,
+);
 
 const serviceUser = process.env.INDIEMATH_SERVICE_USER ?? "indiemath";
 if (!/^[a-z_][a-z0-9_-]*[$]?$/i.test(serviceUser)) {

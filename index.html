@@ -1,316 +1,151 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="IndieMath - Community-funded AI attempts at solving open mathematics and computer science problems">
-    <link rel="icon" type="image/x-icon" href="favicon.ico">
-    <link rel="icon" type="image/png" sizes="32x32" href="favicon.png">
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
-    <title>IndieMath - Community-Funded Mathematical Problem Solving</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            background-color: #f8f9fa;
-        }
-
-        .github-link {
-            position: fixed;
-            top: 18px;
-            right: 18px;
-            z-index: 20;
-            display: grid;
-            width: 42px;
-            height: 42px;
-            place-items: center;
-            color: #1a1a1a;
-            background: rgba(255,255,255,0.94);
-            border: 1px solid #e0e0e0;
-            border-radius: 50%;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            transition: color 150ms ease, border-color 150ms ease, transform 150ms ease;
-        }
-
-        .github-link:hover {
-            color: #0066cc;
-            border-color: #b8d8f8;
-            transform: translateY(-1px);
-        }
-
-        .github-link:focus-visible {
-            outline: 3px solid rgba(0,102,204,0.3);
-            outline-offset: 3px;
-        }
-
-        .github-link svg {
-            width: 24px;
-            height: 24px;
-            fill: currentColor;
-        }
-
-        .container {
-            max-width: 900px;
-            margin: 0 auto;
-            padding: 40px 20px;
-        }
-
-        header {
-            text-align: center;
-            padding: 60px 0 40px;
-            background: white;
-            color: #333;
-            margin: -40px -20px 40px;
-            border-bottom: 1px solid #e0e0e0;
-        }
-
-        h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
-            font-weight: 700;
-            color: #1a1a1a;
-        }
-
-        .tagline {
-            font-size: 1.1em;
-            color: #666;
-            margin-bottom: 10px;
-        }
-
-        section {
-            background: white;
-            padding: 40px;
-            margin-bottom: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-
-        h2 {
-            color: #1a1a1a;
-            margin-bottom: 20px;
-            font-size: 1.8em;
-            border-bottom: 1px solid #e0e0e0;
-            padding-bottom: 10px;
-        }
-
-        h3 {
-            color: #555;
-            margin: 25px 0 15px;
-            font-size: 1.3em;
-        }
-
-        p {
-            margin-bottom: 15px;
-            color: #555;
-        }
-
-        ul {
-            margin: 15px 0 15px 30px;
-            color: #555;
-        }
-
-        ul li {
-            margin-bottom: 10px;
-        }
-
-        .contact-box {
-            background: #f8f9fa;
-            padding: 30px;
-            border-radius: 8px;
-            text-align: center;
-            border: 1px solid #e0e0e0;
-        }
-
-        .contact-box h3 {
-            color: #1a1a1a;
-            margin-top: 0;
-        }
-
-        .email-link {
-            font-size: 1.3em;
-            color: #0066cc;
-            text-decoration: none;
-            font-weight: 600;
-        }
-
-        .email-link:hover {
-            text-decoration: underline;
-        }
-
-        .highlight-box {
-            background: #f8f9fa;
-            border-left: 3px solid #555;
-            padding: 20px;
-            margin: 20px 0;
-        }
-
-        footer {
-            text-align: center;
-            padding: 30px 20px;
-            color: #777;
-            font-size: 0.9em;
-        }
-
-        footer a {
-            color: #555;
-        }
-
-        dialog {
-            width: min(820px, calc(100vw - 32px));
-            height: min(760px, calc(100vh - 32px));
-            margin: auto;
-            border: 0;
-            border-radius: 10px;
-            box-shadow: 0 18px 60px rgba(0,0,0,0.25);
-            overflow: hidden;
-        }
-
-        dialog::backdrop {
-            background: rgba(0,0,0,0.55);
-        }
-
-        .dialog-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 14px 18px;
-            border-bottom: 1px solid #e0e0e0;
-            background: white;
-        }
-
-        .dialog-header h2 {
-            margin: 0;
-            padding: 0;
-            border: 0;
-            font-size: 1.2rem;
-        }
-
-        .dialog-close {
-            border: 0;
-            background: transparent;
-            color: #444;
-            cursor: pointer;
-            font-size: 1.8rem;
-            line-height: 1;
-            padding: 4px 8px;
-        }
-
-        .terms-frame {
-            width: 100%;
-            height: calc(100% - 58px);
-            border: 0;
-            background: white;
-        }
-    </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Fund public AI research attempts on open mathematics and computer science problems, then audit every contribution, run, and review.">
+  <meta name="theme-color" content="#f4f0e6">
+  <meta name="indiemath-public-data" content="https://pub-cee9c214960841dc8b59e262592569bb.r2.dev">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="IndieMath">
+  <meta property="og:title" content="IndieMath — Open problems. Community-funded.">
+  <meta property="og:description" content="Community-funded AI research attempts on open mathematics and computer science problems.">
+  <meta property="og:url" content="https://indiemath.ai/">
+  <meta property="og:image" content="https://indiemath.ai/og.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="IndieMath — Open problems. Community-funded.">
+  <meta name="twitter:description" content="Community-funded AI research attempts, published from contribution through review.">
+  <meta name="twitter:image" content="https://indiemath.ai/og.png">
+  <link rel="canonical" href="https://indiemath.ai/">
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+  <link rel="stylesheet" href="assets/site.css?v=dc1d7fcd">
+  <title>IndieMath - Community-Funded Mathematical Problem Solving</title>
 </head>
-<body>
-    <a class="github-link" href="https://github.com/neelsomani/indiemath" target="_blank" rel="noopener noreferrer" aria-label="View IndieMath on GitHub">
-        <svg viewBox="0 0 16 16" role="img" aria-hidden="true">
-            <path d="M8 0C3.58 0 0 3.64 0 8.13c0 3.59 2.29 6.64 5.47 7.71.4.08.55-.18.55-.39 0-.19-.01-.83-.01-1.51-2.01.38-2.53-.5-2.69-.96-.09-.23-.48-.96-.82-1.15-.28-.15-.68-.53-.01-.54.63-.01 1.08.59 1.23.83.72 1.23 1.87.88 2.33.67.07-.53.28-.88.51-1.08-1.78-.21-3.64-.91-3.64-4.02 0-.89.31-1.62.82-2.19-.08-.21-.36-1.04.08-2.16 0 0 .67-.22 2.2.84A7.5 7.5 0 0 1 8 3.89a7.5 7.5 0 0 1 2 .27c1.53-1.06 2.2-.84 2.2-.84.44 1.12.16 1.95.08 2.16.51.57.82 1.3.82 2.19 0 3.12-1.87 3.81-3.65 4.02.29.25.54.74.54 1.51 0 1.09-.01 1.97-.01 2.24 0 .21.15.47.55.39A8.14 8.14 0 0 0 16 8.13C16 3.64 12.42 0 8 0Z"/>
-        </svg>
+<body data-page="problems">
+  <a class="skip-link" href="#main-content">Skip to content</a>
+
+  <header class="site-header">
+    <a class="wordmark" href="index.html" aria-label="IndieMath home">
+      <img class="wordmark-mark" src="apple-touch-icon.png" alt="" aria-hidden="true">
+      <span>IndieMath</span>
     </a>
-    <div class="container">
-        <header>
-            <h1>IndieMath</h1>
-            <p class="tagline">Community-Funded AI Mathematical Problem Solving</p>
-        </header>
+    <nav class="site-nav" aria-label="Primary navigation">
+      <a href="#problems" aria-current="page">Problems</a>
+      <a href="ledger.html">Contribution Tracker</a>
+    </nav>
+    <a class="github-link" href="https://github.com/neelsomani/indiemath" target="_blank" rel="noopener noreferrer" aria-label="View IndieMath on GitHub">
+      <svg viewBox="0 0 16 16" role="img" aria-hidden="true">
+        <path d="M8 0C3.58 0 0 3.64 0 8.13c0 3.59 2.29 6.64 5.47 7.71.4.08.55-.18.55-.39 0-.19-.01-.83-.01-1.51-2.01.38-2.53-.5-2.69-.96-.09-.23-.48-.96-.82-1.15-.28-.15-.68-.53-.01-.54.63-.01 1.08.59 1.23.83.72 1.23 1.87.88 2.33.67.07-.53.28-.88.51-1.08-1.78-.21-3.64-.91-3.64-4.02 0-.89.31-1.62.82-2.19-.08-.21-.36-1.04.08-2.16 0 0 .67-.22 2.2.84A7.5 7.5 0 0 1 8 3.89a7.5 7.5 0 0 1 2 .27c1.53-1.06 2.2-.84 2.2-.84.44 1.12.16 1.95.08 2.16.51.57.82 1.3.82 2.19 0 3.12-1.87 3.81-3.65 4.02.29.25.54.74.54 1.51 0 1.09-.01 1.97-.01 2.24 0 .21.15.47.55.39A8.14 8.14 0 0 0 16 8.13C16 3.64 12.42 0 8 0Z"/>
+      </svg>
+    </a>
+  </header>
 
-        <section>
-            <h2>What We Do</h2>
-            <p>IndieMath is a platform that enables the community to fund advanced AI attempts at solving open problems in mathematics and computer science. We leverage state-of-the-art AI models to tackle some of the most challenging unsolved problems in these fields.</p>
+  <main id="main-content">
+    <aside class="live-strip" aria-label="Contribution Tracker">
+      <div class="live-strip-topline">
+        <a class="live-strip-title" href="ledger.html">Contribution Tracker</a>
+        <p class="data-freshness" id="data-freshness" aria-live="polite">Connecting to the Contribution Tracker…</p>
+      </div>
+      <div class="metric-strip" id="metric-grid" aria-live="polite" aria-busy="true">
+        <article class="metric-chip metric-chip-emphasis">
+          <strong class="metric-value skeleton-text">—</strong>
+          <span class="metric-label">Received</span>
+        </article>
+        <article class="metric-chip">
+          <strong class="metric-value skeleton-text">—</strong>
+          <span class="metric-label">Compute capacity</span>
+        </article>
+        <article class="metric-chip">
+          <strong class="metric-value skeleton-text">—</strong>
+          <span class="metric-label">Open problems</span>
+        </article>
+        <article class="metric-chip">
+          <strong class="metric-value skeleton-text">—</strong>
+          <span class="metric-label">Research runs</span>
+        </article>
+      </div>
+      <div class="live-strip-footnote">
+        <div class="treasury-notice treasury-notice-compact" id="treasury-notice" hidden></div>
+        <p class="processing-notice processing-notice-compact">Contributions are processed within 1–2 business days after receipt (Monday through Friday).</p>
+      </div>
+    </aside>
 
-            <div class="highlight-box">
-                <p><strong>Our Mission:</strong> Make cutting-edge mathematical research accessible and community-driven by harnessing the power of artificial intelligence.</p>
-            </div>
-        </section>
+    <section class="problems-section ledger-summary" id="problems" aria-label="Problem catalog">
+      <form class="problem-controls" id="problem-controls" role="search">
+        <label class="search-control">
+          <span>Search problems</span>
+          <input id="problem-search" name="query" type="search" placeholder="Search title, statement, or ID" autocomplete="off">
+        </label>
+        <label>
+          <span>Domain</span>
+          <select id="domain-filter" name="domain">
+            <option value="all">All domains</option>
+          </select>
+        </label>
+        <label>
+          <span>Status</span>
+          <select id="status-filter" name="status">
+            <option value="all">All statuses</option>
+            <option value="Open">Open</option>
+            <option value="PendingReview">Under review</option>
+            <option value="Solved">Verified</option>
+          </select>
+        </label>
+        <label>
+          <span>Order</span>
+          <select id="sort-order" name="sort">
+            <option value="publisher">Live runs, then funding</option>
+            <option value="funding">Most funded</option>
+            <option value="title">Title A–Z</option>
+          </select>
+        </label>
+      </form>
 
-        <section>
-            <h2>How It Works</h2>
+      <div class="results-line">
+        <p id="problem-count" aria-live="polite">Loading the catalog…</p>
+        <button class="text-button" id="clear-filters" type="button" hidden>Clear filters</button>
+      </div>
 
-            <h3>1. Problem Selection</h3>
-            <p>We maintain a curated list of open mathematics and computer science problems. These range from computational complexity questions to unsolved conjectures in various mathematical domains.</p>
+      <div class="problem-list" id="problem-list" aria-live="polite" aria-busy="true">
+        <article class="problem-row-shell problem-row-loading"></article>
+        <article class="problem-row-shell problem-row-loading"></article>
+        <article class="problem-row-shell problem-row-loading"></article>
+      </div>
 
-            <h3>2. Community Funding</h3>
-            <p>Users contribute funds toward specific problems, choosing whether they want to fund attempts to prove or disprove a particular statement. Contributions directly fund compute time for advanced AI models and are processed within 1&ndash;2 business days after receipt (Monday through Friday).</p>
+      <div class="load-more-wrap" id="load-more-wrap" hidden>
+        <button class="button button-secondary" id="load-more" type="button">Show more problems</button>
+      </div>
+    </section>
 
-            <h3>3. AI Computation</h3>
-            <p>Funded amounts are used to run state-of-the-art AI models (such as Claude with extended reasoning capabilities) against the selected problems. These computational sessions can run for extended periods as the AI explores potential solutions.</p>
+  </main>
 
-            <h3>4. Review Process</h3>
-            <p>When an AI proposes a solution, it undergoes rigorous human expert review to verify correctness. Only solutions that pass this verification process are accepted.</p>
-        </section>
-
-        <section>
-            <h2>Our Services</h2>
-            <ul>
-                <li><strong>Payment Processing:</strong> We accept monetary contributions via credit card and other payment methods to fund AI computational research.</li>
-                <li><strong>AI Computational Services:</strong> Funds are used to purchase compute credits from AI providers to run advanced reasoning models on mathematical problems.</li>
-                <li><strong>Research Coordination:</strong> We manage the allocation of computational resources across different mathematical problems based on community funding priorities.</li>
-                <li><strong>Public Transparency:</strong> All problem attempts, solutions, and fund allocations are publicly visible and verifiable.</li>
-            </ul>
-        </section>
-
-        <section>
-            <h2>About Our Business</h2>
-
-            <h3>Business Model</h3>
-            <p>IndieMath operates as a platform for crowdfunding mathematical research through AI computation. Users contribute funds that are converted into AI compute credits and applied to solving open mathematical problems. All transactions are transparent and verifiable.</p>
-
-            <h3>Use of Funds</h3>
-            <p>Contributed funds are used exclusively for:</p>
-            <ul>
-                <li>Purchasing AI API credits from providers (primarily Anthropic)</li>
-                <li>Computational infrastructure and storage for problem transcripts</li>
-                <li>Platform operations and maintenance</li>
-            </ul>
-
-            <h3>Transparency</h3>
-            <p>All contributions, fund allocations, and computational spending are publicly auditable. Users can track exactly how their contributions are used and view the AI's work on problems they've funded.</p>
-        </section>
-
-        <section class="contact-box">
-            <h3>Contact Us</h3>
-            <p>For inquiries, partnerships, or support:</p>
-            <p><a href="mailto:contact@indiemath.ai" class="email-link">contact@indiemath.ai</a></p>
-        </section>
-
-        <footer>
-            <p>Except where otherwise noted, the content on this website is dedicated to the public domain under CC0 1.0 Universal. No rights reserved.</p>
-            <p>Advancing mathematical knowledge through community-funded AI research.</p>
-            <p><a href="terms.html" id="terms-link">Terms &amp; Conditions</a></p>
-        </footer>
+  <footer class="site-footer">
+    <div class="footer-legal">
+      <p>Except where otherwise noted, the content on this website is dedicated to the public domain under CC0 1.0 Universal. No rights reserved. <a href="terms.html" data-terms-link>Terms &amp; Conditions</a></p>
     </div>
+  </footer>
 
-    <dialog id="terms-dialog" aria-labelledby="terms-dialog-title">
-        <div class="dialog-header">
-            <h2 id="terms-dialog-title">Terms &amp; Conditions</h2>
-            <button class="dialog-close" type="button" aria-label="Close terms and conditions">&times;</button>
-        </div>
-        <iframe class="terms-frame" src="terms.html?embedded=1" title="IndieMath Terms and Conditions"></iframe>
-    </dialog>
+  <dialog class="terms-dialog" id="terms-dialog" aria-labelledby="terms-dialog-title">
+    <div class="dialog-header">
+      <h2 id="terms-dialog-title">Terms &amp; Conditions</h2>
+      <button class="dialog-close" type="button" aria-label="Close terms and conditions">×</button>
+    </div>
+    <iframe class="terms-frame" src="terms.html?embedded=1" title="IndieMath Terms and Conditions"></iframe>
+  </dialog>
 
-    <script>
-        const termsDialog = document.getElementById('terms-dialog');
-        const termsLink = document.getElementById('terms-link');
-        const termsClose = termsDialog.querySelector('.dialog-close');
+  <template id="error-template">
+    <div class="data-error" role="alert">
+      <strong>The Contribution Tracker could not be loaded.</strong>
+      <p>No balances or statuses are being guessed. Check the independently hosted records or try again.</p>
+      <div>
+        <button class="button button-primary" type="button" data-retry>Try again</button>
+        <a class="button button-secondary" href="https://opencollective.com/indiemath" target="_blank" rel="noopener noreferrer">Open Collective</a>
+      </div>
+    </div>
+  </template>
 
-        if (typeof termsDialog.showModal === 'function') {
-            termsLink.addEventListener('click', (event) => {
-                event.preventDefault();
-                termsDialog.showModal();
-            });
-            termsClose.addEventListener('click', () => termsDialog.close());
-            termsDialog.addEventListener('click', (event) => {
-                if (event.target === termsDialog) termsDialog.close();
-            });
-        }
-    </script>
+  <script type="module" src="assets/site.js?v=e93b7d73"></script>
 </body>
 </html>

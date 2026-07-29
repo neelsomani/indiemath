@@ -13,6 +13,18 @@ export class FakeR2 {
   }
 
   async putObject(key, body, options = {}) {
+    const parsedKey = parseKey(key);
+    if (options.ifNoneMatch !== undefined && typeof options.ifNoneMatch !== "boolean") {
+      throw new TypeError("ifNoneMatch must be a boolean.");
+    }
+    if (options.ifNoneMatch && this.#objects.has(parsedKey)) {
+      this.calls.push(Object.freeze({
+        operation: "putObject",
+        key: parsedKey,
+        outcome: "precondition-failed",
+      }));
+      throw new FakeR2PreconditionFailedError(parsedKey);
+    }
     const bytes = toBytes(body);
     const stored = {
       body: bytes,
@@ -21,8 +33,13 @@ export class FakeR2 {
       metadata: Object.freeze({ ...(options.metadata ?? {}) }),
       etag: createHash("sha256").update(bytes).digest("hex"),
     };
-    this.#objects.set(parseKey(key), stored);
-    this.calls.push(Object.freeze({ operation: "putObject", key, byteLength: bytes.length }));
+    this.#objects.set(parsedKey, stored);
+    this.calls.push(Object.freeze({
+      operation: "putObject",
+      key: parsedKey,
+      byteLength: bytes.length,
+      ifNoneMatch: options.ifNoneMatch === true,
+    }));
     return { etag: stored.etag };
   }
 
@@ -91,6 +108,15 @@ export class FakeR2NotFoundError extends Error {
     super(`Fake R2 object not found: ${key}.`);
     this.name = "FakeR2NotFoundError";
     this.code = "NoSuchKey";
+  }
+}
+
+export class FakeR2PreconditionFailedError extends Error {
+  constructor(key) {
+    super(`Fake R2 conditional write rejected for existing object: ${key}.`);
+    this.name = "FakeR2PreconditionFailedError";
+    this.code = "PreconditionFailed";
+    this.status = 412;
   }
 }
 
