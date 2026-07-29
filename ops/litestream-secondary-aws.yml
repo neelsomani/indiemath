@@ -1,0 +1,22 @@
+# The second copy is deliberately in another vendor, AWS S3. Run this as a
+# separate Litestream v0.5 instance with its own metadata directory.
+snapshot:
+  interval: 1h
+  retention: 168h
+
+validation:
+  interval: 5m
+
+dbs:
+  - path: ${INDIEMATH_DB_PATH}
+    meta-path: ${INDIEMATH_LITESTREAM_META_ROOT}/secondary-aws
+    busy-timeout: 5s
+    checkpoint-interval: 30s
+    replica:
+      type: s3
+      bucket: ${SECONDARY_AWS_REPLICA_BUCKET}
+      path: indiemath/db-replica
+      region: ${SECONDARY_AWS_REGION}
+      access-key-id: ${SECONDARY_AWS_ACCESS_KEY_ID}
+      secret-access-key: ${SECONDARY_AWS_SECRET_ACCESS_KEY}
+      sync-interval: 1s

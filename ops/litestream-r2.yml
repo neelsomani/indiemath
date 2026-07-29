@@ -1,0 +1,23 @@
+# Litestream v0.5 supports one replica per database. This configuration is run
+# alongside litestream-secondary-aws.yml by scripts/replicate-ledger.sh.
+snapshot:
+  interval: 1h
+  retention: 168h
+
+validation:
+  interval: 5m
+
+dbs:
+  - path: ${INDIEMATH_DB_PATH}
+    meta-path: ${INDIEMATH_LITESTREAM_META_ROOT}/r2
+    busy-timeout: 5s
+    checkpoint-interval: 30s
+    replica:
+      type: s3
+      bucket: ${R2_REPLICA_BUCKET}
+      path: indiemath/db-replica
+      endpoint: ${R2_ENDPOINT}
+      region: auto
+      access-key-id: ${R2_ACCESS_KEY_ID}
+      secret-access-key: ${R2_SECRET_ACCESS_KEY}
+      sync-interval: 1s

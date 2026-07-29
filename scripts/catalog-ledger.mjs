@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { initializeLedgerSchema } from "../packages/ledger/schema.mjs";
 import {
   catalogContentHash,
   problemIdentityHash,
@@ -15,7 +16,7 @@ export async function syncCatalog({ catalog, databasePath }) {
 
   const database = new DatabaseSync(databasePath);
   try {
-    initializeCatalogSchema(database);
+    initializeLedgerSchema(database);
     database.exec("BEGIN IMMEDIATE");
     try {
       const result = syncInsideTransaction(database, catalog);
@@ -68,39 +69,6 @@ export function readSyncedCatalog(databasePath) {
   } finally {
     database.close();
   }
-}
-
-function initializeCatalogSchema(database) {
-  database.exec(`
-    PRAGMA foreign_keys = ON;
-    PRAGMA journal_mode = WAL;
-
-    CREATE TABLE IF NOT EXISTS catalog_sync (
-      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-      schema_version INTEGER NOT NULL,
-      catalog_revision INTEGER NOT NULL CHECK (catalog_revision > 0),
-      catalog_hash TEXT NOT NULL,
-      catalog_json TEXT NOT NULL,
-      synced_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS problems (
-      problem_id TEXT PRIMARY KEY,
-      identity_hash TEXT NOT NULL,
-      first_catalog_revision INTEGER NOT NULL CHECK (first_catalog_revision > 0),
-      catalog_revision INTEGER NOT NULL CHECK (catalog_revision > 0),
-      slug TEXT NOT NULL UNIQUE,
-      domain TEXT NOT NULL,
-      title TEXT NOT NULL,
-      statement TEXT NOT NULL,
-      prove_prompt TEXT NOT NULL,
-      disprove_prompt TEXT NOT NULL,
-      source_json TEXT NOT NULL,
-      metadata_json TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'Open'
-        CHECK (status IN ('Open', 'PendingReview', 'Solved'))
-    );
-  `);
 }
 
 function syncInsideTransaction(database, catalog) {

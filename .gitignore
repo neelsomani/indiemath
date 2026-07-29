@@ -4,3 +4,4 @@ fable-math/
 /gather-review-context.sh
 /llm-review.txt
 /data/
+/ops/litestream.env

@@ -24,6 +24,7 @@ import { asCents } from "./money.mjs";
  * @property {string} dedupId
  * @property {string} orderId
  * @property {{kind: 'general'}|{kind: 'pool', problemId: string, direction: Direction}} destination
+ * @property {{kind: 'general'}|{kind: 'pool', problemId: string, direction: Direction}|undefined} intendedDestination
  * @property {number} grossCents
  * @property {number} feesCents
  * @property {number} netCents
@@ -31,6 +32,7 @@ import { asCents } from "./money.mjs";
  * @property {string} donorTag
  * @property {string} creditedAt
  * @property {DonationState} state
+ * @property {number|undefined} waterlineExcludedCents
  */
 /**
  * @typedef {object} Claim
@@ -132,11 +134,23 @@ export function parsePool(value, label = "pool") {
 export function parseDonation(value, label = "donation") {
   const input = expectObject(value, label);
   const destination = parseDonationDestination(input.destination, `${label}.destination`);
+  const intendedDestination = input.intendedDestination === undefined
+    ? undefined
+    : parseDonationDestination(
+        input.intendedDestination,
+        `${label}.intendedDestination`,
+      );
   const grossCents = asCents(input.grossCents, `${label}.grossCents`);
   const feesCents = asCents(input.feesCents, `${label}.feesCents`);
   const netCents = asCents(input.netCents, `${label}.netCents`);
   const refundedCents = asCents(input.refundedCents, `${label}.refundedCents`);
   const state = parseEnum(input.state, DONATION_STATES, `${label}.state`);
+  const waterlineExcludedCents = input.waterlineExcludedCents === undefined
+    ? undefined
+    : asCents(
+        input.waterlineExcludedCents,
+        `${label}.waterlineExcludedCents`,
+      );
   if (grossCents !== feesCents + netCents) {
     throw new RangeError(`${label} grossCents must equal feesCents + netCents.`);
   }
@@ -157,10 +171,19 @@ export function parseDonation(value, label = "donation") {
   if (state === "refunded" && refundedCents !== netCents) {
     throw new RangeError(`${label}.refunded state requires refundedCents = netCents.`);
   }
+  if (
+    waterlineExcludedCents !== undefined
+    && waterlineExcludedCents > netCents
+  ) {
+    throw new RangeError(
+      `${label}.waterlineExcludedCents cannot exceed netCents.`,
+    );
+  }
   return Object.freeze({
     dedupId: expectString(input.dedupId, `${label}.dedupId`),
     orderId: expectString(input.orderId, `${label}.orderId`),
     destination,
+    ...(intendedDestination === undefined ? {} : { intendedDestination }),
     grossCents,
     feesCents,
     netCents,
@@ -168,6 +191,7 @@ export function parseDonation(value, label = "donation") {
     donorTag: expectString(input.donorTag, `${label}.donorTag`),
     creditedAt: parseTimestamp(input.creditedAt, `${label}.creditedAt`),
     state,
+    ...(waterlineExcludedCents === undefined ? {} : { waterlineExcludedCents }),
   });
 }
 

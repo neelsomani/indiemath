@@ -411,6 +411,10 @@ test("the business terms remain reachable as a page and footer modal", async () 
     assert.match(termsHtml, new RegExp(requiredSection));
   }
   assert.match(termsHtml, /contact@indiemath\.ai/);
+  assert.match(
+    termsHtml,
+    /Lipschitz Strategies LLC, the operator of and counterparty for the IndieMath service/,
+  );
 });
 
 test("the repository workflow enforces the complete foundation suite", async () => {

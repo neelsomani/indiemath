@@ -8,6 +8,17 @@ export {
   readSyncedCatalog,
   syncCatalog,
 } from "../../scripts/catalog-ledger.mjs";
+export {
+  LedgerError,
+  openLedger,
+  SQLiteLedger,
+} from "./sqlite-ledger.mjs";
+export {
+  configureLedgerConnection,
+  initializeLedgerSchema,
+  isLedgerSchemaCurrent,
+  LEDGER_SCHEMA_VERSION,
+} from "./schema.mjs";
 
 export function createLedgerRuntime({ config, ledger }) {
   assertRuntimeConfig(config, "ledger");
