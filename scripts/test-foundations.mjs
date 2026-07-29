@@ -23,6 +23,8 @@ import {
   parseFrontendConfig,
   parseReviewedResult,
   parseWorkerConfig,
+  publicPublicationLedgerKey,
+  publicPublicationStateKey,
   rawTranscriptKey,
   r2ArtifactUri,
   reviewKey,
@@ -281,6 +283,16 @@ test("artifact keys are centralized, exact, and path-safe", () => {
     problemId: "math-001",
     reviewTs: 1722124800001,
   }), "reviews/math-001/1722124800001.md");
+  const publicationId = "a".repeat(64);
+  assert.equal(
+    publicPublicationStateKey(publicationId),
+    `public/publications/${publicationId}/state.json`,
+  );
+  assert.equal(
+    publicPublicationLedgerKey(publicationId),
+    `public/publications/${publicationId}/ledger.json`,
+  );
+  assert.throws(() => publicPublicationStateKey("../escape"), /SHA-256/);
   assert.throws(
     () => artifactKeysForClaim({ ...input, problemId: "../escape" }),
     /must be 3–64 characters/,

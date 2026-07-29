@@ -1793,8 +1793,45 @@ export class SQLiteLedger {
     `).all(parsedWorkerId, start, end).map(mapClaimResponse));
   }
 
+  publicationSnapshot() {
+    return this.#readTransaction(() => {
+      const catalog = this.#database.prepare(`
+        SELECT
+          catalog_revision,
+          catalog_hash,
+          catalog_json,
+          synced_at
+        FROM catalog_sync
+        WHERE singleton = 1
+      `).get();
+      if (!catalog) {
+        throw new LedgerError(
+          "catalog-not-synced",
+          "No catalog has been synced into the ledger.",
+        );
+      }
+      return Object.freeze({
+        catalogRevision: Number(catalog.catalog_revision),
+        catalogHash: catalog.catalog_hash,
+        catalog: Object.freeze(JSON.parse(catalog.catalog_json)),
+        catalogSyncedAt: catalog.synced_at,
+        treasury: this.treasuryStatus(),
+        accounting: this.accountingSnapshot(),
+        ...this.#inspectState(),
+      });
+    });
+  }
+
   inspect() {
-    this.#assertOpen();
+    return this.#readTransaction(() => this.#inspectState());
+  }
+
+  #inspectState() {
+    const processingStatuses = new Map(this.#waterlineStatuses().map((status) => [
+      status.dedupId,
+      status,
+    ]));
+    const refundLiabilities = this.#refundLiabilities(processingStatuses);
     const problems = this.#database.prepare(
       "SELECT * FROM problems ORDER BY problem_id",
     ).all().map(mapProblem);
@@ -1808,11 +1845,12 @@ export class SQLiteLedger {
       claimableBalanceCents: this.#claimablePoolBalance(
         row.problem_id,
         row.direction,
+        refundLiabilities,
       ),
     }));
     const donations = this.#database.prepare(
       "SELECT * FROM donations ORDER BY credited_at, dedup_id",
-    ).all().map((row) => this.#mapDonation(row));
+    ).all().map((row) => this.#mapDonation(row, processingStatuses));
     const claims = this.#database.prepare(
       "SELECT * FROM claims ORDER BY claim_ts",
     ).all().map((row) => this.#mapClaim(row));
@@ -1859,7 +1897,9 @@ export class SQLiteLedger {
       settlementSnapshots: Object.freeze(settlementSnapshots),
       generalCreditCents: this.#generalBalance(),
       generalDebtCents: this.#generalDebt(),
-      claimableGeneralCreditCents: this.#claimableGeneralBalance(),
+      claimableGeneralCreditCents: this.#claimableGeneralBalance(
+        refundLiabilities,
+      ),
       spendableCapacityCents: this.#spendableCapacity(),
     });
   }
@@ -2072,13 +2112,19 @@ export class SQLiteLedger {
     }
   }
 
-  #claimablePoolBalance(problemId, direction) {
+  #claimablePoolBalance(problemId, direction, refundLiabilities) {
     const pool = this.#requirePool(problemId, direction);
-    const liability = this.#refundLiabilityFor({
-      kind: "pool",
-      problemId,
-      direction,
-    });
+    const liability = refundLiabilities instanceof Map
+      ? refundLiabilities.get(destinationKey({
+          kind: "pool",
+          problemId,
+          direction,
+        })) ?? 0
+      : this.#refundLiabilityFor({
+          kind: "pool",
+          problemId,
+          direction,
+        });
     const claimable = addCents(Number(pool.balance_cents), -liability);
     if (claimable < 0) {
       throw new LedgerError(
@@ -2120,8 +2166,10 @@ export class SQLiteLedger {
     };
   }
 
-  #claimableGeneralBalance() {
-    const liability = this.#refundLiabilityFor({ kind: "general" });
+  #claimableGeneralBalance(refundLiabilities) {
+    const liability = refundLiabilities instanceof Map
+      ? refundLiabilities.get(destinationKey({ kind: "general" })) ?? 0
+      : this.#refundLiabilityFor({ kind: "general" });
     return Math.max(
       0,
       addCents(this.#generalBalance(), -liability, -this.#generalDebt()),
@@ -2129,27 +2177,50 @@ export class SQLiteLedger {
   }
 
   #refundLiabilityFor(destination) {
-    const statuses = new Map(this.#waterlineStatuses().map((item) => [
-      item.dedupId,
-      item,
-    ]));
-    const donations = this.#database.prepare(
-      "SELECT * FROM donations ORDER BY credited_at, dedup_id",
-    ).all();
-    let liability = 0;
+    return this.#refundLiabilities().get(destinationKey(destination)) ?? 0;
+  }
+
+  #refundLiabilities(processingStatuses) {
+    const statuses = processingStatuses instanceof Map
+      ? processingStatuses
+      : new Map(this.#waterlineStatuses().map((item) => [
+          item.dedupId,
+          item,
+        ]));
+    const donations = this.#database.prepare(`
+      SELECT
+        d.*,
+        COALESCE(SUM(
+          CASE
+            WHEN a.reason_code = 'refund' AND a.status = 'pending'
+            THEN -a.amount_cents
+            ELSE 0
+          END
+        ), 0) AS pending_refund_cents
+      FROM donations d
+      LEFT JOIN adjustments a ON a.donation_dedup_id = d.dedup_id
+      GROUP BY d.dedup_id
+      ORDER BY d.credited_at, d.dedup_id
+    `).all();
+    const liabilities = new Map();
     for (const donation of donations) {
       if (donation.payment_state === "reversed") continue;
-      if (!sameDestination(donation, destination)) continue;
       const status = statuses.get(donation.dedup_id);
       if (!status?.refundEligible) continue;
-      const pending = this.#refundAmount(donation.dedup_id, "pending");
-      liability = addCents(
-        liability,
+      const key = destinationKey(donation.destination_kind === "pool"
+        ? {
+            kind: "pool",
+            problemId: donation.problem_id,
+            direction: donation.direction,
+          }
+        : { kind: "general" });
+      liabilities.set(key, addCents(
+        liabilities.get(key) ?? 0,
         status.effectiveNetCents,
-        -pending,
-      );
+        -Number(donation.pending_refund_cents),
+      ));
     }
-    return liability;
+    return liabilities;
   }
 
   #waterlineStatuses() {
@@ -2451,7 +2522,7 @@ export class SQLiteLedger {
     return row;
   }
 
-  #mapDonation(row) {
+  #mapDonation(row, processingStatuses) {
     const refundedCents = this.#refundAmount(row.dedup_id, "completed");
     const state = row.payment_state === "credited"
       ? deriveDonationRefundState({
@@ -2459,9 +2530,11 @@ export class SQLiteLedger {
           completedRefundCents: refundedCents,
         })
       : row.payment_state;
-    const processing = this.#waterlineStatuses().find(
-      (item) => item.dedupId === row.dedup_id,
-    );
+    const processing = processingStatuses instanceof Map
+      ? processingStatuses.get(row.dedup_id)
+      : this.#waterlineStatuses().find(
+          (item) => item.dedupId === row.dedup_id,
+        );
     return Object.freeze({
       ...parseDonation({
         dedupId: row.dedup_id,
@@ -3004,13 +3077,10 @@ function sortJson(value) {
   );
 }
 
-function sameDestination(row, destination) {
-  if (destination.kind === "general") return row.destination_kind === "general";
-  return (
-    row.destination_kind === "pool"
-    && row.problem_id === destination.problemId
-    && row.direction === destination.direction
-  );
+function destinationKey(destination) {
+  return destination.kind === "general"
+    ? "general"
+    : `pool\u0000${destination.problemId}\u0000${destination.direction}`;
 }
 
 function sameParsedDestination(left, right) {

@@ -52,6 +52,14 @@ export function publicLedgerKey() {
   return "public/ledger.json";
 }
 
+export function publicPublicationStateKey(publicationId) {
+  return `public/publications/${parsePublicationId(publicationId)}/state.json`;
+}
+
+export function publicPublicationLedgerKey(publicationId) {
+  return `public/publications/${parsePublicationId(publicationId)}/ledger.json`;
+}
+
 export function databaseReplicaPrefix() {
   return "db-replica/";
 }
@@ -96,6 +104,13 @@ function parseObjectKey(value, label) {
     || value.split("/").some((segment) => !segment || segment === "." || segment === "..")
   ) {
     throw new TypeError(`${label} must be a safe nonempty R2 object key.`);
+  }
+  return value;
+}
+
+function parsePublicationId(value) {
+  if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) {
+    throw new TypeError("publicationId must be a lowercase SHA-256 digest.");
   }
   return value;
 }

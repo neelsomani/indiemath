@@ -1,6 +1,7 @@
 import {
   assertPort,
   assertRuntimeConfig,
+  parsePublicLedger,
   parsePublisherSnapshot,
 } from "#indiemath/shared";
 
@@ -14,19 +15,32 @@ export function createFrontendRuntime({ config, publicData }) {
     async loadSnapshot() {
       return parsePublisherSnapshot(await publicData.fetchJson(config.stateUrl));
     },
-    async loadPublicLedger() {
-      const ledger = await publicData.fetchJson(config.ledgerUrl);
-      if (!ledger || typeof ledger !== "object" || Array.isArray(ledger)) {
-        throw new TypeError("Public ledger must be an object.");
+    async loadPublicLedger(snapshot) {
+      const state = snapshot ?? await this.loadSnapshot();
+      const ledger = parsePublicLedger(await publicData.fetchJson(
+        state.ledgerKey
+          ? publicObjectUrl(config.publicDataBaseUrl, state.ledgerKey)
+          : config.ledgerUrl,
+      ));
+      if (
+        state.publicationId
+        && ledger.publicationId !== state.publicationId
+      ) {
+        throw new Error(
+          "Public state and ledger belong to different publication generations.",
+        );
+      }
+      if (ledger.catalogRevision !== state.catalogRevision) {
+        throw new Error("Public state and ledger catalog revisions disagree.");
       }
       return ledger;
     },
     async probe() {
-      const [publicDataStatus, snapshot, ledger] = await Promise.all([
+      const [publicDataStatus, snapshot] = await Promise.all([
         publicData.healthcheck(),
         this.loadSnapshot(),
-        this.loadPublicLedger(),
       ]);
+      const ledger = await this.loadPublicLedger(snapshot);
       return {
         ok: true,
         component: "frontend",
@@ -36,4 +50,10 @@ export function createFrontendRuntime({ config, publicData }) {
       };
     },
   });
+}
+
+function publicObjectUrl(baseUrl, objectKey) {
+  const url = new URL(baseUrl);
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}/${objectKey}`;
+  return url.toString();
 }

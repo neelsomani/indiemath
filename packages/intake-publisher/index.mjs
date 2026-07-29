@@ -2,6 +2,7 @@ import {
   assertPort,
   assertRuntimeConfig,
 } from "#indiemath/shared";
+import { PublicLedgerPublisherController } from "./publication.mjs";
 import { readTreasuryPublication } from "./treasury-publication.mjs";
 
 export {
@@ -16,6 +17,11 @@ export {
 export {
   reconcileStripeSettlements,
 } from "./settlement-reconciliation.mjs";
+export {
+  buildPublicDocuments,
+  publishPublicLedgerOnce,
+  PublicLedgerPublisherController,
+} from "./publication.mjs";
 export { readTreasuryPublication };
 
 export function createIntakePublisherRuntime({
@@ -25,7 +31,11 @@ export function createIntakePublisherRuntime({
   openCollective,
 }) {
   assertRuntimeConfig(config, "intake-publisher");
-  assertPort(ledger, "ledger", ["healthcheck", "treasuryStatus"]);
+  assertPort(ledger, "ledger", [
+    "healthcheck",
+    "publicationSnapshot",
+    "treasuryStatus",
+  ]);
   assertPort(r2, "R2", ["healthcheck", "putObject", "getObject"]);
   assertPort(openCollective, "Open Collective", [
     "healthcheck",
@@ -33,12 +43,20 @@ export function createIntakePublisherRuntime({
     "listTiers",
     "listCreditTransactions",
   ]);
+  const publisher = new PublicLedgerPublisherController({
+    ledger,
+    r2,
+    intervalSeconds: config.publishIntervalSeconds,
+  });
 
   return Object.freeze({
     name: "intake-publisher",
     config,
     treasurySnapshot() {
       return readTreasuryPublication(ledger);
+    },
+    publishNow() {
+      return publisher.publishNow();
     },
     async probe() {
       const [ledgerStatus, objectStoreStatus, openCollectiveStatus] = await Promise.all([

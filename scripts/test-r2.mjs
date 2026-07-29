@@ -25,6 +25,7 @@ test("R2 client signs and round-trips worker artifacts through the production po
       objects.set(key, {
         body: new Uint8Array(init.body),
         contentType: headers.get("content-type"),
+        cacheControl: headers.get("cache-control"),
         state: headers.get("x-amz-meta-state"),
       });
       return new Response(null, { status: 200, headers: { etag: "\"put-etag\"" } });
@@ -78,8 +79,10 @@ test("R2 client signs and round-trips worker artifacts through the production po
 
   assert.deepEqual(await client.putObject(key, "Readable output.", {
     contentType: "text/markdown; charset=utf-8",
+    cacheControl: "public, max-age=60",
     metadata: { state: "completed" },
   }), { etag: "put-etag" });
+  assert.equal(calls[0].headers.get("cache-control"), "public, max-age=60");
   const object = await client.getObject(key);
   assert.equal(await object.text(), "Readable output.");
   assert.equal(object.metadata.state, "completed");

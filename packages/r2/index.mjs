@@ -47,6 +47,7 @@ export class R2Client {
 
   async putObject(key, body, {
     contentType = "application/octet-stream",
+    cacheControl,
     metadata = {},
   } = {}) {
     const bytes = toBytes(body);
@@ -54,6 +55,9 @@ export class R2Client {
       body: bytes,
       headers: {
         "content-type": requiredString(contentType, "contentType"),
+        ...(cacheControl
+          ? { "cache-control": requiredString(cacheControl, "cacheControl") }
+          : {}),
         ...metadataHeaders(metadata),
       },
     });

@@ -53,3 +53,41 @@ before handling refund requests.
 
 The publisher uses the same derived treasury object. Neither the public pause
 state nor donation processing badges are stored as mutable flags.
+
+## Public ledger publication
+
+`indiemath-intake.service` runs both the Open Collective poller and the public
+ledger publisher. It reads one coherent ledger snapshot, publishes immutable
+state and ledger objects, updates the fixed `public/ledger.json` mirror, and
+replaces `public/state.json` last as the commit point. The state document names
+the exact immutable ledger key and digest that the browser must load. The
+artifact bucket's Cloudflare settings must carry the exact policy in
+`ops/r2-public-cors.json`; bucket administration deliberately remains outside
+the server's object-write credential.
+
+Apply that policy once in Cloudflare: open the public artifact bucket, choose
+Settings, add a CORS policy, paste the complete contents of
+`ops/r2-public-cors.json`, and save. Verify a browser-style request returns the
+wildcard origin:
+
+```sh
+curl --head \
+  --header 'Origin: https://example.com' \
+  "${PUBLIC_DATA_BASE_URL%/}/public/state.json"
+```
+
+Inspect the most recent publication without exposing the protected service
+environment:
+
+```sh
+sudo systemctl status indiemath-intake.service
+sudo journalctl -u indiemath-intake.service -n 50 --no-pager
+curl --fail --silent --show-error \
+  "${PUBLIC_DATA_BASE_URL%/}/public/state.json"
+```
+
+A successful service log includes `public-ledger-published` with the
+publication ID, catalog revision, counts, unprocessed cents, and object keys.
+The public documents contain direct checkout URLs from the synced Open
+Collective tiers; the browser never constructs those URLs or receives R2,
+Open Collective, Stripe, or Anthropic credentials.

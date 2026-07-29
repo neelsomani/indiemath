@@ -21,8 +21,8 @@ if (arguments_.has("--help")) {
   console.log(`
 Usage: sudo ./setup-intake.sh
 
-Installs and restarts the supervised Open Collective charge-level intake
-service. Set INDIEMATH_ENV_FILE to use an environment file other than
+Installs and restarts the supervised Open Collective charge-level intake and
+public-ledger publisher. Set INDIEMATH_ENV_FILE to use an environment file other than
 /etc/indiemath/indiemath.env.
 `.trim());
   process.exit(0);
@@ -80,7 +80,7 @@ execFileSync(
   { stdio: "inherit" },
 );
 console.log(
-  `Enabled Open Collective intake from ${rootDir} as ${serviceUser}.`,
+  `Enabled Open Collective intake and publisher from ${rootDir} as ${serviceUser}.`,
 );
 
 function absolutePath(value, label) {

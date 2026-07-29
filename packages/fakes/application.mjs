@@ -8,10 +8,7 @@ import {
   parseFrontendConfig,
   parseIntakePublisherConfig,
   parseLedgerConfig,
-  parsePublisherSnapshot,
   parseWorkerConfig,
-  publicLedgerKey,
-  publicStateKey,
   validateWorkerFleet,
   WORKER_IDS,
 } from "#indiemath/shared";
@@ -32,8 +29,6 @@ export async function createFakeApplication() {
   const openCollective = new FakeOpenCollective();
   const anthropicAdmin = new FakeAnthropicAdmin();
   const publicData = new FakePublicData({ r2, origin: FAKE_PUBLIC_ORIGIN });
-
-  await seedPublicData(r2);
 
   const workerConfigs = validateWorkerFleet(WORKER_IDS.map((workerId) => (
     parseWorkerConfig(fakeWorkerEnvironment(workerId))
@@ -65,6 +60,7 @@ export async function createFakeApplication() {
     r2,
     openCollective,
   });
+  await intakePublisher.publishNow();
   const admin = createAdminRuntime({
     config: parseAdminConfig({
       ...commonEnvironment(),
@@ -132,61 +128,4 @@ function fakeWorkerEnvironment(workerId) {
     INDIEMATH_CATALOG: `${FAKE_ROOT}/catalog.json`,
     INDIEMATH_PRICING_TABLE: `${FAKE_ROOT}/pricing.json`,
   };
-}
-
-async function seedPublicData(r2) {
-  const snapshot = parsePublisherSnapshot({
-    schemaVersion: 1,
-    generatedAt: "2026-07-28T00:00:00.000Z",
-    catalogRevision: 1,
-    treasury: {
-      settledContributionCents: 0,
-      completedRefundCents: 0,
-      pendingRefundCents: 0,
-      fundingEventCents: 0,
-      settledButUnfundedCents: 0,
-      availableToFundCents: 0,
-      spendableCapacityCents: 0,
-      liveReservationsCents: 0,
-      runsPausedPendingSettlement: true,
-    },
-    problems: [{
-      problemId: "math-001",
-      slug: "the-riemann-hypothesis",
-      domain: "mathematics",
-      title: "The Riemann Hypothesis",
-      statement: "Every non-trivial zero has real part one half.",
-      status: "Open",
-      pools: [
-        {
-          problemId: "math-001",
-          direction: "prove",
-          balanceCents: 0,
-          cumulativeDonationsCents: 0,
-        },
-        {
-          problemId: "math-001",
-          direction: "disprove",
-          balanceCents: 0,
-          cumulativeDonationsCents: 0,
-        },
-      ],
-      liveClaims: [],
-      reviewedResults: [],
-      recentDonations: [],
-      solvedWithResidue: false,
-    }],
-  });
-  await r2.putObject(publicStateKey(), JSON.stringify(snapshot), {
-    contentType: "application/json",
-  });
-  await r2.putObject(publicLedgerKey(), JSON.stringify({
-    schemaVersion: 1,
-    generatedAt: "2026-07-28T00:00:00.000Z",
-    donations: [],
-    runs: [],
-    reviews: [],
-  }), {
-    contentType: "application/json",
-  });
 }

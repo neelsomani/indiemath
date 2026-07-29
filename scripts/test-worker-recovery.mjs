@@ -58,6 +58,7 @@ test("startup discovers its live claim and reconstructs a checkpointed solution"
   await assertCrashAt(worker.runClaim({
     claim,
     taskBudgetTokens: 20_000,
+    clock: fixture.clock,
     onBoundary: crashAt("after_ledger_checkpoint"),
   }), "after_ledger_checkpoint");
   await assert.rejects(
@@ -100,6 +101,7 @@ test("startup resumes checkpoint history without duplicating spend", async (cont
   await assertCrashAt(worker.runClaim({
     claim,
     taskBudgetTokens: 20_000,
+    clock: fixture.clock,
     onBoundary: crashAt("after_ledger_checkpoint"),
   }), "after_ledger_checkpoint");
   const before = fixture.ledger.listClaimResponses(claim);
@@ -214,6 +216,7 @@ test("sampling step zero settles every expired claim and preserves both solution
   await assertCrashAt(worker2.runClaim({
     claim: disprove,
     taskBudgetTokens: 20_000,
+    clock: fixture.clock,
     onBoundary: crashAt("after_ledger_checkpoint"),
   }), "after_ledger_checkpoint");
   fixture.setNow(Math.max(
@@ -329,6 +332,7 @@ test("every paid-run persistence boundary converges after process death", async 
       await assertCrashAt(worker.runClaim({
         claim,
         taskBudgetTokens: 20_000,
+        clock: fixture.clock,
         onBoundary: crashAt(boundary),
       }), boundary);
       const result = await worker.recoverStartup({
@@ -372,6 +376,7 @@ test("recovery's own R2 and ledger boundaries are restart-safe", async (context)
     await assertCrashAt(worker.runClaim({
       claim,
       taskBudgetTokens: 20_000,
+      clock: fixture.clock,
       onBoundary: crashAt("after_ledger_checkpoint"),
     }), "after_ledger_checkpoint");
     fixture.setNow(Date.parse(claim.leaseExpiresAt));
@@ -495,6 +500,7 @@ test("settlement boundaries and a crashed resolve race converge idempotently", a
       await assertCrashAt(worker.runClaim({
         claim,
         taskBudgetTokens: 20_000,
+        clock: fixture.clock,
         onBoundary: crashAt(boundary),
       }), boundary);
       const result = await worker.recoverStartup({
@@ -529,6 +535,7 @@ test("settlement boundaries and a crashed resolve race converge idempotently", a
     await assertCrashAt(worker.runClaim({
       claim: current,
       taskBudgetTokens: 20_000,
+      clock: fixture.clock,
       async onBoundary(event) {
         if (event.name !== "after_r2_solution_write") return;
         fixture.ledger.settle({

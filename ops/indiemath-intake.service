@@ -1,5 +1,5 @@
 [Unit]
-Description=IndieMath Open Collective contribution intake
+Description=IndieMath Open Collective intake and public ledger publisher
 After=network-online.target indiemath-litestream.service
 Wants=network-online.target
 

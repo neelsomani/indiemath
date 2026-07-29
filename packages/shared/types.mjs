@@ -4,7 +4,7 @@ import {
   parseProblemId,
   parseWorkerId,
 } from "./identifiers.mjs";
-import { asCents } from "./money.mjs";
+import { addCents, asCents } from "./money.mjs";
 import { deriveTreasuryPublication } from "./treasury.mjs";
 
 /** @typedef {'prove'|'disprove'} Direction */
@@ -133,7 +133,19 @@ export function parseProblemStatus(value, label = "status") {
 
 export function parsePool(value, label = "pool") {
   const input = expectObject(value, label);
-  return Object.freeze({
+  const claimableBalanceCents = optionalCents(
+    input.claimableBalanceCents,
+    `${label}.claimableBalanceCents`,
+  );
+  const unprocessedCents = optionalCents(
+    input.unprocessedCents,
+    `${label}.unprocessedCents`,
+  );
+  const minimumContributionCents = optionalCents(
+    input.minimumContributionCents,
+    `${label}.minimumContributionCents`,
+  );
+  return Object.freeze(compactObject({
     problemId: parseProblemId(input.problemId, `${label}.problemId`),
     direction: parseDirection(input.direction, `${label}.direction`),
     balanceCents: asCents(input.balanceCents, `${label}.balanceCents`),
@@ -141,7 +153,11 @@ export function parsePool(value, label = "pool") {
       input.cumulativeDonationsCents,
       `${label}.cumulativeDonationsCents`,
     ),
-  });
+    claimableBalanceCents,
+    unprocessedCents,
+    checkoutUrl: optionalString(input.checkoutUrl, `${label}.checkoutUrl`),
+    minimumContributionCents,
+  }));
 }
 
 export function parseDonation(value, label = "donation") {
@@ -192,7 +208,33 @@ export function parseDonation(value, label = "donation") {
       `${label}.waterlineExcludedCents cannot exceed netCents.`,
     );
   }
-  return Object.freeze({
+  const pendingRefundCents = optionalCents(
+    input.pendingRefundCents,
+    `${label}.pendingRefundCents`,
+  );
+  const remainingCents = optionalCents(
+    input.remainingCents,
+    `${label}.remainingCents`,
+  );
+  const unprocessedCents = optionalCents(
+    input.unprocessedCents,
+    `${label}.unprocessedCents`,
+  );
+  const processingStatus = input.processingStatus === undefined
+    ? undefined
+    : parseEnum(
+        input.processingStatus,
+        ["received", "processed", "refunded", "reversed"],
+        `${label}.processingStatus`,
+      );
+  if (
+    processingStatus === "processed"
+    && unprocessedCents !== undefined
+    && unprocessedCents !== 0
+  ) {
+    throw new RangeError(`${label}.processed donations cannot be unprocessed.`);
+  }
+  return Object.freeze(compactObject({
     dedupId: expectString(input.dedupId, `${label}.dedupId`),
     orderId: expectString(input.orderId, `${label}.orderId`),
     destination,
@@ -205,7 +247,11 @@ export function parseDonation(value, label = "donation") {
     creditedAt: parseTimestamp(input.creditedAt, `${label}.creditedAt`),
     state,
     ...(waterlineExcludedCents === undefined ? {} : { waterlineExcludedCents }),
-  });
+    pendingRefundCents,
+    remainingCents,
+    unprocessedCents,
+    processingStatus,
+  }));
 }
 
 export function parseClaim(value, label = "claim") {
@@ -219,7 +265,13 @@ export function parseClaim(value, label = "claim") {
   if (spentCents > budgetCents) {
     throw new RangeError(`${label}.spentCents cannot exceed budgetCents.`);
   }
-  return Object.freeze({
+  const status = input.status === undefined
+    ? undefined
+    : parseEnum(input.status, ["running", "settled"], `${label}.status`);
+  if (status !== undefined && (status === "settled") !== Boolean(input.settled)) {
+    throw new TypeError(`${label}.status must agree with settled.`);
+  }
+  return Object.freeze(compactObject({
     problemId: parseProblemId(input.problemId, `${label}.problemId`),
     direction: parseDirection(input.direction, `${label}.direction`),
     catalogRevision: parsePositiveInteger(
@@ -233,8 +285,26 @@ export function parseClaim(value, label = "claim") {
     spentCents,
     leaseExpiresAt: parseTimestamp(input.leaseExpiresAt, `${label}.leaseExpiresAt`),
     settled: expectBoolean(input.settled, `${label}.settled`),
+    settledAt: optionalString(input.settledAt, `${label}.settledAt`),
     solutionUri: optionalString(input.solutionUri, `${label}.solutionUri`),
-  });
+    status,
+    remainingBudgetCents: optionalCents(
+      input.remainingBudgetCents,
+      `${label}.remainingBudgetCents`,
+    ),
+    transcriptPrefix: optionalString(
+      input.transcriptPrefix,
+      `${label}.transcriptPrefix`,
+    ),
+    transcriptSegments: input.transcriptSegments === undefined
+      ? undefined
+      : Object.freeze(parseArray(
+          input.transcriptSegments,
+          parsePublishedTranscriptSegment,
+          `${label}.transcriptSegments`,
+        )),
+    solutionKey: optionalString(input.solutionKey, `${label}.solutionKey`),
+  }));
 }
 
 export function parseReviewedResult(value, label = "reviewedResult") {
@@ -250,7 +320,7 @@ export function parseReviewedResult(value, label = "reviewedResult") {
   if (outcome !== "conditional" && assumptionLabel) {
     throw new TypeError(`${label}.assumptionLabel is valid only for a conditional result.`);
   }
-  return Object.freeze({
+  return Object.freeze(compactObject({
     problemId: parseProblemId(input.problemId, `${label}.problemId`),
     direction: parseDirection(input.direction, `${label}.direction`),
     claimTs: parsePositiveInteger(input.claimTs, `${label}.claimTs`),
@@ -259,7 +329,9 @@ export function parseReviewedResult(value, label = "reviewedResult") {
     noteUri: expectString(input.noteUri, `${label}.noteUri`),
     assumptionLabel,
     reviewedAt: parseTimestamp(input.reviewedAt, `${label}.reviewedAt`),
-  });
+    solutionKey: optionalString(input.solutionKey, `${label}.solutionKey`),
+    noteKey: optionalString(input.noteKey, `${label}.noteKey`),
+  }));
 }
 
 export function parseFundingEvent(value, label = "fundingEvent") {
@@ -371,16 +443,60 @@ export function parsePublisherSnapshot(value, label = "publisherSnapshot") {
     problemIds.add(problem.problemId);
   }
 
-  return Object.freeze({
+  const publicationId = input.publicationId === undefined
+    ? undefined
+    : parseSha256(input.publicationId, `${label}.publicationId`);
+  const ledgerSha256 = input.ledgerSha256 === undefined
+    ? undefined
+    : parseSha256(input.ledgerSha256, `${label}.ledgerSha256`);
+  const unprocessedCents = optionalCents(
+    input.unprocessedCents,
+    `${label}.unprocessedCents`,
+  );
+  const generalCredit = input.generalCredit === undefined
+    ? undefined
+    : parsePublishedGeneralCredit(
+        input.generalCredit,
+        `${label}.generalCredit`,
+      );
+  if (
+    unprocessedCents !== undefined
+    && generalCredit !== undefined
+    && problems.every((problem) => problem.unprocessedCents !== undefined)
+  ) {
+    const derivedUnprocessed = problems.reduce(
+      (total, problem) => addCents(total, problem.unprocessedCents),
+      generalCredit.unprocessedCents,
+    );
+    if (derivedUnprocessed !== unprocessedCents) {
+      throw new RangeError(
+        `${label}.unprocessedCents must equal problem and general totals.`,
+      );
+    }
+  }
+  return Object.freeze(compactObject({
     schemaVersion: 1,
+    publicationId,
     generatedAt: parseTimestamp(input.generatedAt, `${label}.generatedAt`),
     catalogRevision: parsePositiveInteger(
       input.catalogRevision,
       `${label}.catalogRevision`,
     ),
+    catalog: input.catalog === undefined
+      ? undefined
+      : Object.freeze(structuredClone(expectObject(
+          input.catalog,
+          `${label}.catalog`,
+        ))),
+    ledgerKey: input.ledgerKey === undefined
+      ? undefined
+      : parseObjectKey(input.ledgerKey, `${label}.ledgerKey`),
+    ledgerSha256,
+    unprocessedCents,
     treasury: parseTreasurySnapshot(input.treasury, `${label}.treasury`),
+    generalCredit,
     problems: Object.freeze(problems),
-  });
+  }));
 }
 
 function parsePublishedProblem(value, label) {
@@ -435,18 +551,140 @@ function parsePublishedProblem(value, label) {
     throw new TypeError(`${label}.solvedWithResidue requires Solved status.`);
   }
 
-  return Object.freeze({
+  const pendingSolutions = input.pendingSolutions === undefined
+    ? undefined
+    : Object.freeze(parseArray(
+        input.pendingSolutions,
+        parsePendingSolution,
+        `${label}.pendingSolutions`,
+      ));
+  const totalPoolBalanceCents = optionalCents(
+    input.totalPoolBalanceCents,
+    `${label}.totalPoolBalanceCents`,
+  );
+  const unprocessedCents = optionalCents(
+    input.unprocessedCents,
+    `${label}.unprocessedCents`,
+  );
+  if (
+    totalPoolBalanceCents !== undefined
+    && pools.reduce((total, pool) => addCents(total, pool.balanceCents), 0)
+      !== totalPoolBalanceCents
+  ) {
+    throw new RangeError(`${label}.totalPoolBalanceCents disagrees with pools.`);
+  }
+  if (
+    unprocessedCents !== undefined
+    && pools.every((pool) => pool.unprocessedCents !== undefined)
+    && pools.reduce(
+      (total, pool) => addCents(total, pool.unprocessedCents),
+      0,
+    )
+      !== unprocessedCents
+  ) {
+    throw new RangeError(`${label}.unprocessedCents disagrees with pools.`);
+  }
+  return Object.freeze(compactObject({
     problemId,
+    catalogRevision: input.catalogRevision === undefined
+      ? undefined
+      : parsePositiveInteger(
+          input.catalogRevision,
+          `${label}.catalogRevision`,
+        ),
     slug: expectString(input.slug, `${label}.slug`),
     domain: expectString(input.domain, `${label}.domain`),
     title: expectString(input.title, `${label}.title`),
     statement: expectString(input.statement, `${label}.statement`),
+    directions: input.directions === undefined
+      ? undefined
+      : Object.freeze(structuredClone(expectObject(
+          input.directions,
+          `${label}.directions`,
+        ))),
+    source: input.source === undefined
+      ? undefined
+      : Object.freeze(structuredClone(expectObject(
+          input.source,
+          `${label}.source`,
+        ))),
     status,
+    totalPoolBalanceCents,
+    unprocessedCents,
     pools: Object.freeze(pools),
     liveClaims: Object.freeze(liveClaims),
+    pendingSolutions,
     reviewedResults: Object.freeze(reviewedResults),
     recentDonations: Object.freeze(recentDonations),
     solvedWithResidue,
+  }));
+}
+
+export function parsePublicLedger(value, label = "publicLedger") {
+  const input = expectObject(value, label);
+  if (input.schemaVersion !== 1) {
+    throw new TypeError(`${label}.schemaVersion must be 1.`);
+  }
+  const publicationId = parseSha256(
+    input.publicationId,
+    `${label}.publicationId`,
+  );
+  const donations = parseArray(
+    input.donations,
+    parseDonation,
+    `${label}.donations`,
+  );
+  const runs = parseArray(input.runs, parseClaim, `${label}.runs`);
+  const reviews = parseArray(
+    input.reviews,
+    parseReviewedResult,
+    `${label}.reviews`,
+  );
+  const adjustments = parseArray(
+    input.adjustments,
+    parsePublishedAdjustment,
+    `${label}.adjustments`,
+  );
+  const fundingEvents = parseArray(
+    input.fundingEvents,
+    parsePublishedFundingEvent,
+    `${label}.fundingEvents`,
+  );
+  const settlementSnapshots = parseArray(
+    input.settlementSnapshots,
+    parsePublishedSettlementSnapshot,
+    `${label}.settlementSnapshots`,
+  );
+  return Object.freeze({
+    ...structuredClone(input),
+    schemaVersion: 1,
+    publicationId,
+    generatedAt: parseTimestamp(input.generatedAt, `${label}.generatedAt`),
+    catalogRevision: parsePositiveInteger(
+      input.catalogRevision,
+      `${label}.catalogRevision`,
+    ),
+    catalogHash: parseSha256(input.catalogHash, `${label}.catalogHash`),
+    catalogSyncedAt: parseTimestamp(
+      input.catalogSyncedAt,
+      `${label}.catalogSyncedAt`,
+    ),
+    stateKey: parseObjectKey(input.stateKey, `${label}.stateKey`),
+    treasury: parseTreasurySnapshot(input.treasury, `${label}.treasury`),
+    accounting: parsePublishedAccounting(
+      input.accounting,
+      `${label}.accounting`,
+    ),
+    generalCredit: parsePublishedGeneralCredit(
+      input.generalCredit,
+      `${label}.generalCredit`,
+    ),
+    donations: Object.freeze(donations),
+    runs: Object.freeze(runs),
+    reviews: Object.freeze(reviews),
+    adjustments: Object.freeze(adjustments),
+    fundingEvents: Object.freeze(fundingEvents),
+    settlementSnapshots: Object.freeze(settlementSnapshots),
   });
 }
 
@@ -463,6 +701,193 @@ function parseTreasurySnapshot(value, label) {
     );
   }
   return publication;
+}
+
+function parsePublishedGeneralCredit(value, label) {
+  const input = expectObject(value, label);
+  return Object.freeze({
+    balanceCents: asCents(input.balanceCents, `${label}.balanceCents`),
+    debtCents: asCents(input.debtCents, `${label}.debtCents`),
+    claimableBalanceCents: asCents(
+      input.claimableBalanceCents,
+      `${label}.claimableBalanceCents`,
+    ),
+    unprocessedCents: asCents(
+      input.unprocessedCents,
+      `${label}.unprocessedCents`,
+    ),
+  });
+}
+
+function parsePublishedAccounting(value, label) {
+  const input = expectObject(value, label);
+  const result = {
+    donationNetCents: asCents(
+      input.donationNetCents,
+      `${label}.donationNetCents`,
+    ),
+    adjustmentInflowsCents: asCents(
+      input.adjustmentInflowsCents,
+      `${label}.adjustmentInflowsCents`,
+    ),
+    inflowsCents: asCents(input.inflowsCents, `${label}.inflowsCents`),
+    poolBalanceCents: asCents(
+      input.poolBalanceCents,
+      `${label}.poolBalanceCents`,
+    ),
+    generalCreditCents: asCents(
+      input.generalCreditCents,
+      `${label}.generalCreditCents`,
+    ),
+    generalDebtCents: asCents(
+      input.generalDebtCents,
+      `${label}.generalDebtCents`,
+    ),
+    settledSpendCents: asCents(
+      input.settledSpendCents,
+      `${label}.settledSpendCents`,
+    ),
+    liveReservationCents: asCents(
+      input.liveReservationCents,
+      `${label}.liveReservationCents`,
+    ),
+    adjustmentOutflowsCents: asCents(
+      input.adjustmentOutflowsCents,
+      `${label}.adjustmentOutflowsCents`,
+    ),
+    accountedCents: asCents(
+      input.accountedCents,
+      `${label}.accountedCents`,
+    ),
+    balanced: expectBoolean(input.balanced, `${label}.balanced`),
+  };
+  if (
+    result.inflowsCents !== addCents(
+      result.donationNetCents,
+      result.adjustmentInflowsCents,
+    )
+    || result.balanced !== (result.inflowsCents === result.accountedCents)
+  ) {
+    throw new RangeError(`${label} totals disagree.`);
+  }
+  return Object.freeze(result);
+}
+
+function parsePublishedAdjustment(value, label) {
+  const input = expectObject(value, label);
+  return Object.freeze(compactObject({
+    adjustmentId: parseSha256(input.adjustmentId, `${label}.adjustmentId`),
+    reasonCode: parseEnum(
+      input.reasonCode,
+      ADJUSTMENT_REASONS,
+      `${label}.reasonCode`,
+    ),
+    amountCents: asCents(
+      input.amountCents,
+      `${label}.amountCents`,
+      { allowNegative: true },
+    ),
+    donationDedupId: optionalString(
+      input.donationDedupId,
+      `${label}.donationDedupId`,
+    ),
+    status: parseEnum(
+      input.status,
+      ADJUSTMENT_STATUSES,
+      `${label}.status`,
+    ),
+    createdAt: parseTimestamp(input.createdAt, `${label}.createdAt`),
+    resolvedAt: input.resolvedAt === undefined
+      ? undefined
+      : parseTimestamp(input.resolvedAt, `${label}.resolvedAt`),
+  }));
+}
+
+function parsePublishedFundingEvent(value, label) {
+  const input = expectObject(value, label);
+  const amountCents = asCents(input.amountCents, `${label}.amountCents`);
+  if (amountCents === 0) {
+    throw new RangeError(`${label}.amountCents must be positive.`);
+  }
+  return Object.freeze({
+    fundingEventId: parseSha256(
+      input.fundingEventId,
+      `${label}.fundingEventId`,
+    ),
+    amountCents,
+    settledContributionCents: asCents(
+      input.settledContributionCents,
+      `${label}.settledContributionCents`,
+    ),
+    fundedAt: parseTimestamp(input.fundedAt, `${label}.fundedAt`),
+  });
+}
+
+function parsePublishedSettlementSnapshot(value, label) {
+  const input = expectObject(value, label);
+  return Object.freeze({
+    providerKind: parseEnum(
+      input.providerKind,
+      ["stripe", "open_collective_host"],
+      `${label}.providerKind`,
+    ),
+    cutoffAt: parseTimestamp(input.cutoffAt, `${label}.cutoffAt`),
+    settledContributionCents: asCents(
+      input.settledContributionCents,
+      `${label}.settledContributionCents`,
+    ),
+    sourceRecordCount: parseNonnegativeInteger(
+      input.sourceRecordCount,
+      `${label}.sourceRecordCount`,
+    ),
+    sourceHash: parseSha256(input.sourceHash, `${label}.sourceHash`),
+    createdAt: parseTimestamp(input.createdAt, `${label}.createdAt`),
+  });
+}
+
+function parsePublishedTranscriptSegment(value, label) {
+  const input = expectObject(value, label);
+  return Object.freeze({
+    sequence: parsePositiveInteger(input.sequence, `${label}.sequence`),
+    modelId: expectString(input.modelId, `${label}.modelId`),
+    stopReason: optionalString(input.stopReason, `${label}.stopReason`),
+    usage: Object.freeze(structuredClone(expectObject(
+      input.usage,
+      `${label}.usage`,
+    ))),
+    pricedCostCents: asCents(
+      input.pricedCostCents,
+      `${label}.pricedCostCents`,
+    ),
+    appliedCostCents: asCents(
+      input.appliedCostCents,
+      `${label}.appliedCostCents`,
+    ),
+    overageCents: asCents(input.overageCents, `${label}.overageCents`),
+    requestStartedAt: parseTimestamp(
+      input.requestStartedAt,
+      `${label}.requestStartedAt`,
+    ),
+    completedAt: parseTimestamp(input.completedAt, `${label}.completedAt`),
+    rawTranscriptKey: parseObjectKey(
+      input.rawTranscriptKey,
+      `${label}.rawTranscriptKey`,
+    ),
+    humanTranscriptKey: parseObjectKey(
+      input.humanTranscriptKey,
+      `${label}.humanTranscriptKey`,
+    ),
+  });
+}
+
+function parsePendingSolution(value, label) {
+  const input = expectObject(value, label);
+  return Object.freeze({
+    role: parseEnum(input.role, ["primary", "secondary"], `${label}.role`),
+    direction: parseDirection(input.direction, `${label}.direction`),
+    claimTs: parsePositiveInteger(input.claimTs, `${label}.claimTs`),
+    solutionKey: parseObjectKey(input.solutionKey, `${label}.solutionKey`),
+  });
 }
 
 function parseDonationDestination(value, label) {
@@ -509,6 +934,25 @@ function parseObjectKey(value, label) {
 
 function optionalString(value, label) {
   return value === undefined || value === null ? undefined : expectString(value, label);
+}
+
+function optionalCents(value, label) {
+  return value === undefined || value === null
+    ? undefined
+    : asCents(value, label);
+}
+
+function parseSha256(value, label) {
+  if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) {
+    throw new TypeError(`${label} must be a lowercase SHA-256 digest.`);
+  }
+  return value;
+}
+
+function compactObject(value) {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, item]) => item !== undefined),
+  );
 }
 
 function expectObject(value, label) {

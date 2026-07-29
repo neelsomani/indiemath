@@ -17,6 +17,7 @@ export class FakeR2 {
     const stored = {
       body: bytes,
       contentType: options.contentType ?? "application/octet-stream",
+      cacheControl: options.cacheControl,
       metadata: Object.freeze({ ...(options.metadata ?? {}) }),
       etag: createHash("sha256").update(bytes).digest("hex"),
     };
@@ -34,6 +35,7 @@ export class FakeR2 {
     return {
       body,
       contentType: stored.contentType,
+      cacheControl: stored.cacheControl,
       metadata: { ...stored.metadata },
       etag: stored.etag,
       text: async () => new TextDecoder().decode(body),
@@ -48,6 +50,7 @@ export class FakeR2 {
     return {
       contentLength: stored.body.length,
       contentType: stored.contentType,
+      cacheControl: stored.cacheControl,
       metadata: { ...stored.metadata },
       etag: stored.etag,
     };

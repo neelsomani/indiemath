@@ -460,8 +460,8 @@ test("real Stripe client pins idempotency and returns privacy-minimized settleme
     )));
   });
 
-test("deployment assets supervise the authoritative intake poller", async () => {
-  const [unit, setup, runner, wrapper, wrapperStat] = await Promise.all([
+test("deployment assets supervise the authoritative intake and publisher", async () => {
+  const [unit, setup, runner, wrapper, wrapperStat, corsPolicyText] = await Promise.all([
     readFile(path.join(rootDir, "ops", "indiemath-intake.service"), "utf8"),
     readFile(path.join(rootDir, "scripts", "setup-intake.mjs"), "utf8"),
     readFile(
@@ -470,15 +470,26 @@ test("deployment assets supervise the authoritative intake poller", async () => 
     ),
     readFile(path.join(rootDir, "setup-intake.sh"), "utf8"),
     stat(path.join(rootDir, "setup-intake.sh")),
+    readFile(path.join(rootDir, "ops", "r2-public-cors.json"), "utf8"),
   ]);
+  const corsPolicy = JSON.parse(corsPolicyText);
   assert.match(unit, /EnvironmentFile=\/etc\/indiemath\/indiemath\.env/);
   assert.match(unit, /Restart=always/);
   assert.match(unit, /ReadWritePaths=\/var\/lib\/indiemath/);
   assert.match(setup, /\["restart", "indiemath-intake\.service"\]/);
   assert.match(runner, /OpenCollectiveIntakeController/);
+  assert.match(runner, /PublicLedgerPublisherController/);
+  assert.match(runner, /public-ledger-published/);
   assert.match(runner, /runStripeDisputeIntakeOnce/);
   assert.match(wrapper, /scripts\/setup-intake\.mjs/);
   assert.ok((wrapperStat.mode & 0o111) !== 0, "setup-intake.sh must be executable");
+  assert.deepEqual(corsPolicy, [{
+    AllowedOrigins: ["*"],
+    AllowedMethods: ["GET", "HEAD"],
+    AllowedHeaders: [],
+    ExposeHeaders: ["ETag", "Content-Length"],
+    MaxAgeSeconds: 3_600,
+  }]);
 });
 
 function transaction(
