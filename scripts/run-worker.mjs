@@ -32,7 +32,6 @@ try {
         bucket: config.r2.bucket,
         endpoint: config.r2.endpoint,
       },
-      anthropicApiKeyId: config.anthropic.apiKeyId,
     }),
     dependencies: probe.dependencies,
   }));

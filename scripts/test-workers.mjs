@@ -57,7 +57,6 @@ test("production worker composition binds the real R2 and Anthropic ports", asyn
       },
       anthropic: {
         apiKey: "worker-secret",
-        apiKeyId: "key-id",
       },
     },
     ledger: fixture.ledger,

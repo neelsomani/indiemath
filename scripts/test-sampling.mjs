@@ -447,11 +447,8 @@ test("the deployment runs exactly four supervised workers with isolated credenti
       exampleEnvironment,
       new RegExp(`WORKER_${workerNumber}_ANTHROPIC_API_KEY=`),
     );
-    assert.match(
-      exampleEnvironment,
-      new RegExp(`WORKER_${workerNumber}_ANTHROPIC_API_KEY_ID=`),
-    );
   }
+  assert.doesNotMatch(exampleEnvironment, /WORKER_\d+_ANTHROPIC_API_KEY_ID=/);
   assert.match(service, /EnvironmentFile=\/etc\/indiemath\/workers\/%i\.env/);
   assert.match(service, /^Restart=always$/m);
   assert.match(service, /^NoNewPrivileges=true$/m);

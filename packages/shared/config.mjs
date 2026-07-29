@@ -38,9 +38,7 @@ export function parseWorkerConfig(environment) {
   const runtime = parseRuntime(environment);
   const workerId = parseWorkerId(required(environment, "WORKER_ID"), "WORKER_ID");
 
-  const anthropic = {
-    apiKeyId: required(environment, "ANTHROPIC_API_KEY_ID"),
-  };
+  const anthropic = {};
   if (runtime === "production") {
     anthropic.apiKey = required(environment, "ANTHROPIC_API_KEY");
   } else {
@@ -131,7 +129,6 @@ export function parseFrontendConfig(environment) {
 export function validateWorkerFleet(configs, { requireComplete = true } = {}) {
   if (!Array.isArray(configs)) throw new TypeError("Worker fleet must be an array.");
   const workerIds = new Set();
-  const apiKeyIds = new Set();
   const apiKeys = new Set();
 
   for (const [index, config] of configs.entries()) {
@@ -139,7 +136,6 @@ export function validateWorkerFleet(configs, { requireComplete = true } = {}) {
       throw new TypeError(`Worker fleet entry ${index} is not a parsed worker config.`);
     }
     recordUnique(workerIds, config.workerId, "worker ID");
-    recordUnique(apiKeyIds, config.anthropic.apiKeyId, "Anthropic API key ID");
     if (config.anthropic.apiKey) {
       recordUnique(
         apiKeys,

@@ -28,10 +28,9 @@ if (arguments_.has("--help")) {
   console.log(`
 Usage: sudo ./setup-workers.sh [--check]
 
-Validates four unique worker API keys and API-key IDs from the protected
-IndieMath environment. Without --check, writes one root-only environment per
-worker, installs the systemd template, and enables and restarts all four
-workers.
+Validates four unique worker API keys from the protected IndieMath environment.
+Without --check, writes one root-only environment per worker, installs the
+systemd template, and enables and restarts all four workers.
 `.trim());
   process.exit(0);
 }
@@ -119,7 +118,6 @@ function workerEnvironment(workerId) {
     R2_SECRET_ACCESS_KEY: required("R2_SECRET_ACCESS_KEY"),
     WORKER_ID: workerId,
     ANTHROPIC_API_KEY: required(`WORKER_${suffix}_ANTHROPIC_API_KEY`),
-    ANTHROPIC_API_KEY_ID: required(`WORKER_${suffix}_ANTHROPIC_API_KEY_ID`),
   });
 }
 

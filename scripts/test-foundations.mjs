@@ -287,15 +287,15 @@ test("artifact keys are centralized, exact, and path-safe", () => {
   );
 });
 
-test("worker configuration rejects missing and duplicate keys", () => {
-  const configs = WORKER_IDS.map((workerId, index) => parseWorkerConfig(
-    fakeWorkerEnvironment(workerId, index + 1),
+test("worker configuration rejects missing and duplicate key secrets", () => {
+  const configs = WORKER_IDS.map((workerId) => parseWorkerConfig(
+    fakeWorkerEnvironment(workerId),
   ));
   assert.equal(validateWorkerFleet(configs).length, 4);
 
   assert.throws(
     () => parseWorkerConfig({
-      ...fakeWorkerEnvironment("worker-1", 1),
+      ...fakeWorkerEnvironment("worker-1"),
       ANTHROPIC_API_KEY: "must-not-enter-fake-runtime",
     }),
     /must not receive production credentials/,
@@ -306,8 +306,7 @@ test("worker configuration rejects missing and duplicate keys", () => {
   );
   assert.throws(
     () => parseWorkerConfig({
-      ...fakeWorkerEnvironment("worker-1", 1),
-      ANTHROPIC_API_KEY_ID: "",
+      ...productionWorkerEnvironment("worker-1", 1, ""),
     }),
     /Missing required configuration/,
   );
@@ -325,7 +324,7 @@ test("worker configuration rejects missing and duplicate keys", () => {
   );
 
   const defaultedPaths = parseWorkerConfig({
-    ...fakeWorkerEnvironment("worker-1", 1),
+    ...fakeWorkerEnvironment("worker-1"),
     INDIEMATH_CATALOG: undefined,
     INDIEMATH_PRICING_TABLE: undefined,
   });
@@ -485,7 +484,7 @@ test("the repository workflow enforces the complete foundation suite", async () 
   assert.ok(testIndex > checkIndex, "workflow must run tests after the probe");
 });
 
-function fakeWorkerEnvironment(workerId, keyNumber) {
+function fakeWorkerEnvironment(workerId) {
   return {
     INDIEMATH_RUNTIME: "fake",
     INDIEMATH_DB: "/tmp/indiemath-test/ledger.sqlite",
@@ -493,7 +492,6 @@ function fakeWorkerEnvironment(workerId, keyNumber) {
     INDIEMATH_PRICING_TABLE: "/tmp/indiemath-test/pricing.json",
     R2_BUCKET: "indiemath-fake",
     WORKER_ID: workerId,
-    ANTHROPIC_API_KEY_ID: `key-fake-${keyNumber}`,
   };
 }
 
@@ -508,7 +506,6 @@ function productionWorkerEnvironment(workerId, keyNumber, apiKey) {
     R2_ACCESS_KEY_ID: `r2-access-${keyNumber}`,
     R2_SECRET_ACCESS_KEY: `r2-secret-${keyNumber}`,
     WORKER_ID: workerId,
-    ANTHROPIC_API_KEY_ID: `key-production-${keyNumber}`,
     ANTHROPIC_API_KEY: apiKey,
   };
 }

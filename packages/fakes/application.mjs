@@ -35,8 +35,8 @@ export async function createFakeApplication() {
 
   await seedPublicData(r2);
 
-  const workerConfigs = validateWorkerFleet(WORKER_IDS.map((workerId, index) => (
-    parseWorkerConfig(fakeWorkerEnvironment(workerId, index + 1))
+  const workerConfigs = validateWorkerFleet(WORKER_IDS.map((workerId) => (
+    parseWorkerConfig(fakeWorkerEnvironment(workerId))
   )));
   const workerMessages = workerConfigs.map(() => new FakeAnthropicMessages());
   const workers = workerConfigs.map((config, index) => {
@@ -125,13 +125,12 @@ function commonEnvironment() {
   };
 }
 
-function fakeWorkerEnvironment(workerId, keyNumber) {
+function fakeWorkerEnvironment(workerId) {
   return {
     ...commonEnvironment(),
     WORKER_ID: workerId,
     INDIEMATH_CATALOG: `${FAKE_ROOT}/catalog.json`,
     INDIEMATH_PRICING_TABLE: `${FAKE_ROOT}/pricing.json`,
-    ANTHROPIC_API_KEY_ID: `key_fake_${keyNumber}`,
   };
 }
 
