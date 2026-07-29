@@ -3,4 +3,20 @@
 set -eu
 
 root_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+production_env="/etc/indiemath/indiemath.env"
+
+if [ -e "$production_env" ]; then
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "Production admin commands must run with sudo so the protected environment can be loaded." >&2
+    exit 2
+  fi
+  set -a
+  # shellcheck disable=SC1091
+  . "$production_env"
+  set +a
+  service_user="${INDIEMATH_SERVICE_USER:-indiemath}"
+  exec runuser -u "$service_user" --preserve-environment -- \
+    node "$root_dir/scripts/indiemath.mjs" "$@"
+fi
+
 exec node --env-file-if-exists="$root_dir/.env" "$root_dir/scripts/indiemath.mjs" "$@"

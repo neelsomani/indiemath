@@ -5,6 +5,7 @@ import {
   parseWorkerId,
 } from "./identifiers.mjs";
 import { asCents } from "./money.mjs";
+import { deriveTreasuryPublication } from "./treasury.mjs";
 
 /** @typedef {'prove'|'disprove'} Direction */
 /** @typedef {'Open'|'PendingReview'|'Solved'} ProblemStatus */
@@ -77,11 +78,23 @@ import { asCents } from "./money.mjs";
  * @property {string} createdAt
  */
 /**
+ * @typedef {object} TreasurySnapshot
+ * @property {number} settledContributionCents
+ * @property {number} completedRefundCents
+ * @property {number} pendingRefundCents
+ * @property {number} fundingEventCents
+ * @property {number} settledButUnfundedCents
+ * @property {number} availableToFundCents
+ * @property {number} spendableCapacityCents
+ * @property {number} liveReservationsCents
+ * @property {boolean} runsPausedPendingSettlement
+ */
+/**
  * @typedef {object} PublisherSnapshot
  * @property {1} schemaVersion
  * @property {string} generatedAt
  * @property {number} catalogRevision
- * @property {object} treasury
+ * @property {TreasurySnapshot} treasury
  * @property {Array<object>} problems
  */
 
@@ -439,24 +452,17 @@ function parsePublishedProblem(value, label) {
 
 function parseTreasurySnapshot(value, label) {
   const input = expectObject(value, label);
-  return Object.freeze({
-    settledButUnfundedCents: asCents(
-      input.settledButUnfundedCents,
-      `${label}.settledButUnfundedCents`,
-    ),
-    spendableCapacityCents: asCents(
-      input.spendableCapacityCents,
-      `${label}.spendableCapacityCents`,
-    ),
-    liveReservationsCents: asCents(
-      input.liveReservationsCents,
-      `${label}.liveReservationsCents`,
-    ),
-    runsPausedPendingSettlement: expectBoolean(
-      input.runsPausedPendingSettlement,
-      `${label}.runsPausedPendingSettlement`,
-    ),
-  });
+  const publication = deriveTreasuryPublication(input);
+  const declaredPause = expectBoolean(
+    input.runsPausedPendingSettlement,
+    `${label}.runsPausedPendingSettlement`,
+  );
+  if (declaredPause !== publication.runsPausedPendingSettlement) {
+    throw new TypeError(
+      `${label}.runsPausedPendingSettlement must be derived from spendable capacity.`,
+    );
+  }
+  return publication;
 }
 
 function parseDonationDestination(value, label) {

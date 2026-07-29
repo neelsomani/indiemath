@@ -141,10 +141,15 @@ async function seedPublicData(r2) {
     generatedAt: "2026-07-28T00:00:00.000Z",
     catalogRevision: 1,
     treasury: {
+      settledContributionCents: 0,
+      completedRefundCents: 0,
+      pendingRefundCents: 0,
+      fundingEventCents: 0,
       settledButUnfundedCents: 0,
+      availableToFundCents: 0,
       spendableCapacityCents: 0,
       liveReservationsCents: 0,
-      runsPausedPendingSettlement: false,
+      runsPausedPendingSettlement: true,
     },
     problems: [{
       problemId: "math-001",

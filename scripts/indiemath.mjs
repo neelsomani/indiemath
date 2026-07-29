@@ -3,15 +3,22 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseDollarAmount } from "#indiemath/shared";
 import { readCatalog, validateCatalog } from "./catalog-lib.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const [area, command, ...args] = process.argv.slice(2);
 
 try {
-  const options = area === "open-collective" && command === "tiers"
-    ? parseOptions(args.slice(1))
-    : parseOptions(args);
+  const treasuryAmount = area === "treasury" && command === "fund"
+    ? args[0]
+    : undefined;
+  const optionArguments = area === "open-collective" && command === "tiers"
+    ? args.slice(1)
+    : area === "treasury" && command === "fund"
+      ? args.slice(1)
+      : args;
+  const options = parseOptions(optionArguments);
   const databasePath = resolveFromRoot(
     options.db ?? process.env.INDIEMATH_DB ?? "data/indiemath.sqlite",
   );
@@ -235,6 +242,9 @@ try {
     const stripe = new StripeClient({
       secretKey: requiredEnvironment("STRIPE_SECRET_KEY"),
       accountId: process.env.STRIPE_ACCOUNT_ID?.trim() || undefined,
+      ...(process.env.STRIPE_API_BASE_URL?.trim()
+        ? { baseUrl: process.env.STRIPE_API_BASE_URL.trim() }
+        : {}),
     });
     const ledger = await openLedger({ databasePath });
     try {
@@ -297,6 +307,80 @@ try {
 
       default:
         usage(`Unknown stripe command: ${command ?? "<missing>"}.`);
+      }
+    } finally {
+      ledger.close();
+    }
+  } else if (area === "treasury") {
+    let treasuryFundAmountCents;
+    if (command === "status") {
+      rejectUnknownOptions(options, ["db", "page-size", "through"]);
+    } else if (command === "fund") {
+      rejectUnknownOptions(options, ["db", "page-size", "ref", "through"]);
+      if (!treasuryAmount || treasuryAmount.startsWith("--")) {
+        usage("treasury fund requires a positive dollar amount.");
+      }
+      if (!options.ref) usage("treasury fund requires --ref <id>.");
+      try {
+        treasuryFundAmountCents = parseDollarAmount(treasuryAmount);
+      } catch (error) {
+        usage(error.message);
+      }
+      if (treasuryFundAmountCents === 0) {
+        usage("treasury fund amount must be positive.");
+      }
+    } else {
+      usage(`Unknown treasury command: ${command ?? "<missing>"}.`);
+    }
+    const [
+      {
+        fundTreasuryFromReconciliation,
+        refreshTreasuryStatus,
+      },
+      { openLedger },
+      { StripeClient },
+    ] = await Promise.all([
+      import("#indiemath/admin-cli"),
+      import("#indiemath/ledger"),
+      import("#indiemath/stripe"),
+    ]);
+    const stripe = new StripeClient({
+      secretKey: requiredEnvironment("STRIPE_SECRET_KEY"),
+      accountId: requiredEnvironment("STRIPE_ACCOUNT_ID"),
+      ...(process.env.STRIPE_API_BASE_URL?.trim()
+        ? { baseUrl: process.env.STRIPE_API_BASE_URL.trim() }
+        : {}),
+    });
+    const ledger = await openLedger({ databasePath });
+    try {
+      switch (command) {
+      case "status": {
+        const result = await refreshTreasuryStatus({
+          ledger,
+          stripe,
+          ...(options.through ? { through: options.through } : {}),
+          ...(options["page-size"]
+            ? { pageSize: parsePositiveInteger(options["page-size"], "--page-size") }
+            : {}),
+        });
+        console.log(JSON.stringify(result, null, 2));
+        break;
+      }
+
+      case "fund": {
+        const result = await fundTreasuryFromReconciliation({
+          ledger,
+          stripe,
+          amountCents: treasuryFundAmountCents,
+          externalReference: options.ref,
+          ...(options.through ? { through: options.through } : {}),
+          ...(options["page-size"]
+            ? { pageSize: parsePositiveInteger(options["page-size"], "--page-size") }
+            : {}),
+        });
+        console.log(JSON.stringify(result, null, 2));
+        break;
+      }
       }
     } finally {
       ledger.close();
@@ -464,6 +548,9 @@ Usage:
   ./indiemath stripe disputes [--through <timestamp>] [--page-size <n>] [--db <path>]
   ./indiemath stripe reconcile [--through <timestamp>] [--page-size <n>] [--db <path>]
   ./indiemath stripe status [--db <path>]
+  ./indiemath treasury status [--through <timestamp>] [--page-size <n>] [--db <path>]
+  ./indiemath treasury fund <dollars> --ref <bank-or-ramp-reference> \\
+    [--through <timestamp>] [--page-size <n>] [--db <path>]
   ANTHROPIC_ADMIN_API_KEY=... ./indiemath anthropic reconcile \\
     --problem <id> --direction <prove|disprove> --claim-ts <epoch-ms> \\
     --api-key-id <id> [--db <path>] [--pricing <path>] [--tolerance-cents <n>]

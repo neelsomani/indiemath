@@ -13,4 +13,17 @@ export class FakeLedger {
       fake: true,
     };
   }
+
+  treasuryStatus() {
+    return {
+      settledContributionCents: 0,
+      completedRefundCents: 0,
+      pendingRefundCents: 0,
+      fundingEventCents: 0,
+      settledButUnfundedCents: 0,
+      availableToFundCents: 0,
+      spendableCapacityCents: 0,
+      liveReservationsCents: 0,
+    };
+  }
 }

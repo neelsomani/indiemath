@@ -8,6 +8,10 @@ export {
   OPEN_COLLECTIVE_MINIMUM_CENTS,
   syncOpenCollectiveTiers,
 } from "./open-collective-tiers.mjs";
+export {
+  fundTreasuryFromReconciliation,
+  refreshTreasuryStatus,
+} from "./treasury.mjs";
 
 export function createAdminRuntime({
   config,

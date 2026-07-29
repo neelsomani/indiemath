@@ -414,6 +414,12 @@ test("every component starts and probes against fakes without production credent
     application.components.workers.map((worker) => worker.workerId),
     WORKER_IDS,
   );
+  assert.equal(
+    application.components.intakePublisher
+      .treasurySnapshot()
+      .runsPausedPendingSettlement,
+    true,
+  );
   assert.ok(results.every((result) => result.ok));
 });
 
