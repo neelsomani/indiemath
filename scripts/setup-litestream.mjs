@@ -117,7 +117,12 @@ await atomicWrite(installedUnitPath, unit, 0o644);
 execFileSync(systemctlBinary, ["daemon-reload"], { stdio: "inherit" });
 execFileSync(
   systemctlBinary,
-  ["enable", "--now", "indiemath-litestream.service"],
+  ["enable", "indiemath-litestream.service"],
+  { stdio: "inherit" },
+);
+execFileSync(
+  systemctlBinary,
+  ["restart", "indiemath-litestream.service"],
   { stdio: "inherit" },
 );
 
@@ -188,10 +193,7 @@ function safeManagedDirectory(directory, label) {
 }
 
 function resolveServiceUser() {
-  const proposed = process.env.INDIEMATH_SERVICE_USER
-    ?? (process.env.SUDO_USER && process.env.SUDO_USER !== "root"
-      ? process.env.SUDO_USER
-      : "indiemath");
+  const proposed = process.env.INDIEMATH_SERVICE_USER ?? "indiemath";
   if (!/^[a-z_][a-z0-9_-]*[$]?$/i.test(proposed)) {
     fail("INDIEMATH_SERVICE_USER is not a valid local user name.");
   }

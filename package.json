@@ -10,7 +10,9 @@
     "#indiemath/frontend": "./packages/frontend/index.mjs",
     "#indiemath/intake-publisher": "./packages/intake-publisher/index.mjs",
     "#indiemath/ledger": "./packages/ledger/index.mjs",
+    "#indiemath/open-collective": "./packages/open-collective/index.mjs",
     "#indiemath/shared": "./packages/shared/index.mjs",
+    "#indiemath/stripe": "./packages/stripe/index.mjs",
     "#indiemath/workers": "./packages/workers/index.mjs"
   },
   "engines": {

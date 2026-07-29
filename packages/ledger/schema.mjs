@@ -1,4 +1,4 @@
-export const LEDGER_SCHEMA_VERSION = 5;
+export const LEDGER_SCHEMA_VERSION = 6;
 
 export function configureLedgerConnection(database) {
   database.exec(`
@@ -115,6 +115,11 @@ export function initializeLedgerSchema(database) {
           waterline_excluded_cents >= 0
           AND waterline_excluded_cents <= net_cents
         ),
+      source_kind TEXT NOT NULL DEFAULT 'manual'
+        CHECK (source_kind IN ('manual', 'open_collective')),
+      attribution_kind TEXT NOT NULL DEFAULT 'manual'
+        CHECK (attribution_kind IN ('manual', 'mapped', 'unattributed')),
+      source_json TEXT,
       CHECK (gross_cents = fees_cents + net_cents),
       CHECK (
         (destination_kind = 'pool' AND problem_id IS NOT NULL AND direction IS NOT NULL)
@@ -134,6 +139,72 @@ export function initializeLedgerSchema(database) {
       ON donations(order_id);
     CREATE INDEX IF NOT EXISTS donations_destination
       ON donations(destination_kind, problem_id, direction);
+
+    CREATE TABLE IF NOT EXISTS open_collective_tiers (
+      provider_tier_id TEXT PRIMARY KEY,
+      tier_slug TEXT NOT NULL UNIQUE,
+      problem_id TEXT NOT NULL REFERENCES problems(problem_id),
+      direction TEXT NOT NULL CHECK (direction IN ('prove', 'disprove')),
+      catalog_revision INTEGER NOT NULL CHECK (catalog_revision > 0),
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      minimum_amount_cents INTEGER NOT NULL CHECK (minimum_amount_cents >= 5000),
+      checkout_url TEXT NOT NULL,
+      synced_at TEXT NOT NULL,
+      UNIQUE(problem_id, direction)
+    );
+
+    CREATE INDEX IF NOT EXISTS open_collective_tiers_destination
+      ON open_collective_tiers(problem_id, direction);
+
+    CREATE TABLE IF NOT EXISTS intake_checkpoints (
+      source TEXT PRIMARY KEY,
+      cursor TEXT,
+      scan_since TEXT,
+      high_water_at TEXT,
+      updated_at TEXT NOT NULL,
+      CHECK (
+        (cursor IS NULL AND scan_since IS NULL)
+        OR
+        (cursor IS NOT NULL AND scan_since IS NOT NULL)
+      )
+    );
+
+    CREATE TABLE IF NOT EXISTS settlement_records (
+      provider_reference TEXT PRIMARY KEY,
+      provider_kind TEXT NOT NULL CHECK (
+        provider_kind IN ('stripe', 'open_collective_host')
+      ),
+      record_kind TEXT NOT NULL CHECK (
+        record_kind IN ('contribution', 'refund', 'dispute', 'payout')
+      ),
+      amount_cents INTEGER NOT NULL,
+      occurred_at TEXT NOT NULL,
+      payout_reference TEXT,
+      source_json TEXT NOT NULL,
+      observed_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS settlement_records_cutoff
+      ON settlement_records(provider_kind, occurred_at, provider_reference);
+    CREATE INDEX IF NOT EXISTS settlement_records_payout
+      ON settlement_records(payout_reference, provider_reference);
+
+    CREATE TABLE IF NOT EXISTS settlement_snapshots (
+      snapshot_id TEXT PRIMARY KEY,
+      provider_kind TEXT NOT NULL CHECK (
+        provider_kind IN ('stripe', 'open_collective_host')
+      ),
+      provider_account_id TEXT NOT NULL,
+      cutoff_at TEXT NOT NULL,
+      settled_contribution_cents INTEGER NOT NULL
+        CHECK (settled_contribution_cents >= 0),
+      source_record_count INTEGER NOT NULL CHECK (source_record_count >= 0),
+      source_hash TEXT NOT NULL,
+      source_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(provider_kind, provider_account_id, cutoff_at, source_hash)
+    );
 
     CREATE TABLE IF NOT EXISTS claims (
       problem_id TEXT NOT NULL,
@@ -299,6 +370,19 @@ export function initializeLedgerSchema(database) {
     "waterline_excluded_cents",
     "INTEGER NOT NULL DEFAULT 0 CHECK (waterline_excluded_cents >= 0)",
   );
+  ensureColumn(
+    database,
+    "donations",
+    "source_kind",
+    "TEXT NOT NULL DEFAULT 'manual' CHECK (source_kind IN ('manual', 'open_collective'))",
+  );
+  ensureColumn(
+    database,
+    "donations",
+    "attribution_kind",
+    "TEXT NOT NULL DEFAULT 'manual' CHECK (attribution_kind IN ('manual', 'mapped', 'unattributed'))",
+  );
+  ensureColumn(database, "donations", "source_json", "TEXT");
   database.exec(`
     UPDATE donations
     SET intended_problem_id = problem_id,

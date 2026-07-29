@@ -949,7 +949,9 @@ test("replication assets define the R2 replica and its restore drill", async () 
   assert.match(setupWrapper, /--env-file-if-exists=/);
   assert.match(setupImplementation, /\/etc\/indiemath\/litestream\.env/);
   assert.match(setupImplementation, /atomicWrite\(environmentPath, environmentBody, 0o600\)/);
-  assert.match(setupImplementation, /\["enable", "--now", "indiemath-litestream\.service"\]/);
+  assert.match(setupImplementation, /\["enable", "indiemath-litestream\.service"\]/);
+  assert.match(setupImplementation, /\["restart", "indiemath-litestream\.service"\]/);
+  assert.doesNotMatch(setupImplementation, /process\.env\.SUDO_USER/);
 });
 
 test("the restore verifier accepts an exact closed-ledger copy", async (context) => {

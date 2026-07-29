@@ -25,6 +25,8 @@ const MAX_RUN_BUDGET_CENTS = 50_000;
 const RESIDUE_FLOOR_CENTS = 5_000;
 const LEASE_MILLISECONDS = 65 * 60 * 1000;
 const FUNDING_MODES = new Set(["pool-first", "pool-only", "general-only"]);
+const SQLITE_WRITE_RETRY_CLOCK = new Int32Array(new SharedArrayBuffer(4));
+const SQLITE_WRITE_RETRY_LIMIT = 80;
 
 export class LedgerError extends Error {
   constructor(code, message, options) {
@@ -94,6 +96,7 @@ export class SQLiteLedger {
   }
 
   donate(input) {
+    const source = normalizeDonationSource(input?.source);
     const proposed = parseDonation({
       ...input,
       refundedCents: 0,
@@ -104,7 +107,7 @@ export class SQLiteLedger {
         "SELECT * FROM donations WHERE dedup_id = ?",
       ).get(proposed.dedupId);
       if (existing) {
-        this.#assertDonationReplay(existing, proposed);
+        this.#assertDonationReplay(existing, proposed, source);
         return { outcome: "duplicate", donation: this.#mapDonation(existing) };
       }
 
@@ -129,8 +132,11 @@ export class SQLiteLedger {
           net_cents,
           donor_tag,
           credited_at,
-          payment_state
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'credited')
+          payment_state,
+          source_kind,
+          attribution_kind,
+          source_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'credited', ?, ?, ?)
       `).run(
         proposed.dedupId,
         proposed.orderId,
@@ -148,6 +154,9 @@ export class SQLiteLedger {
         proposed.netCents,
         proposed.donorTag,
         proposed.creditedAt,
+        source.kind,
+        source.attribution,
+        source.metadata === undefined ? null : canonicalJson(source.metadata),
       );
 
       if (destination.kind === "pool") {
@@ -1189,6 +1198,491 @@ export class SQLiteLedger {
     ));
   }
 
+  findDonationByStripeChargeId(chargeId) {
+    this.#assertOpen();
+    const id = requiredString(chargeId, "chargeId");
+    const rows = this.#database.prepare(`
+      SELECT * FROM donations
+      WHERE source_kind = 'open_collective' AND source_json IS NOT NULL
+      ORDER BY credited_at, dedup_id
+    `).all();
+    const matches = rows.filter((row) => {
+      try {
+        return JSON.parse(row.source_json).stripeChargeId === id;
+      } catch {
+        throw new LedgerError(
+          "source-metadata-corrupt",
+          `Donation ${row.dedup_id} has invalid source metadata.`,
+        );
+      }
+    });
+    if (matches.length > 1) {
+      throw new LedgerError(
+        "provider-reference-conflict",
+        `Stripe charge ${id} maps to more than one donation.`,
+      );
+    }
+    return matches[0] ? this.#mapDonation(matches[0]) : undefined;
+  }
+
+  getAdjustment(externalReference) {
+    this.#assertOpen();
+    return mapAdjustment(this.#requireAdjustment(
+      requiredString(externalReference, "externalReference"),
+    ));
+  }
+
+  recordOpenCollectiveTier({
+    providerTierId,
+    tierSlug,
+    problemId,
+    direction,
+    catalogRevision,
+    name,
+    description,
+    minimumAmountCents,
+    checkoutUrl,
+    syncedAt,
+  }) {
+    const providerId = requiredString(providerTierId, "providerTierId");
+    const slug = requiredString(tierSlug, "tierSlug");
+    const parsedProblemId = parseProblemId(problemId);
+    const parsedDirection = parseDirection(direction);
+    const revision = positiveInteger(catalogRevision, "catalogRevision");
+    const parsedName = requiredString(name, "name");
+    const parsedDescription = requiredString(description, "description");
+    const minimum = positiveCents(minimumAmountCents, "minimumAmountCents");
+    if (minimum < 5_000) {
+      throw new RangeError("minimumAmountCents cannot be below 5000.");
+    }
+    const checkout = requiredHttpUrl(checkoutUrl, "checkoutUrl");
+    const timestamp = syncedAt === undefined
+      ? this.#now().iso
+      : requiredTimestamp(syncedAt, "syncedAt");
+    return this.#transaction(() => {
+      this.#requirePool(parsedProblemId, parsedDirection);
+      const current = this.#database.prepare(`
+        SELECT * FROM open_collective_tiers
+        WHERE problem_id = ? AND direction = ?
+      `).get(parsedProblemId, parsedDirection);
+      if (
+        current
+        && current.provider_tier_id === providerId
+        && current.tier_slug === slug
+        && Number(current.catalog_revision) === revision
+        && current.name === parsedName
+        && current.description === parsedDescription
+        && Number(current.minimum_amount_cents) === minimum
+        && current.checkout_url === checkout
+      ) {
+        return {
+          outcome: "unchanged",
+          tier: mapOpenCollectiveTier(current),
+        };
+      }
+
+      // A provider can regenerate a slug or ID while the catalog destination
+      // remains the same. The pair is the durable identity in our ledger.
+      this.#database.prepare(`
+        DELETE FROM open_collective_tiers
+        WHERE problem_id = ? AND direction = ?
+      `).run(parsedProblemId, parsedDirection);
+      const conflicting = this.#database.prepare(`
+        SELECT problem_id, direction
+        FROM open_collective_tiers
+        WHERE provider_tier_id = ? OR tier_slug = ?
+      `).get(providerId, slug);
+      if (conflicting) {
+        throw new LedgerError(
+          "tier-mapping-conflict",
+          `Open Collective tier ${providerId}/${slug} is already mapped to `
+          + `${conflicting.problem_id}/${conflicting.direction}.`,
+        );
+      }
+      this.#database.prepare(`
+        INSERT INTO open_collective_tiers (
+          provider_tier_id,
+          tier_slug,
+          problem_id,
+          direction,
+          catalog_revision,
+          name,
+          description,
+          minimum_amount_cents,
+          checkout_url,
+          synced_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        providerId,
+        slug,
+        parsedProblemId,
+        parsedDirection,
+        revision,
+        parsedName,
+        parsedDescription,
+        minimum,
+        checkout,
+        timestamp,
+      );
+      return {
+        outcome: current ? "updated" : "created",
+        tier: mapOpenCollectiveTier(this.#database.prepare(`
+          SELECT * FROM open_collective_tiers
+          WHERE problem_id = ? AND direction = ?
+        `).get(parsedProblemId, parsedDirection)),
+      };
+    });
+  }
+
+  listOpenCollectiveTiers() {
+    this.#assertOpen();
+    return Object.freeze(this.#database.prepare(`
+      SELECT * FROM open_collective_tiers
+      ORDER BY problem_id, direction
+    `).all().map(mapOpenCollectiveTier));
+  }
+
+  findOpenCollectiveTier({ providerTierId, tierSlug } = {}) {
+    this.#assertOpen();
+    if (providerTierId === undefined && tierSlug === undefined) {
+      throw new TypeError("providerTierId or tierSlug is required.");
+    }
+    const providerId = providerTierId === undefined
+      ? undefined
+      : requiredString(providerTierId, "providerTierId");
+    const slug = tierSlug === undefined
+      ? undefined
+      : requiredString(tierSlug, "tierSlug");
+    const rows = providerId && slug
+      ? this.#database.prepare(`
+          SELECT * FROM open_collective_tiers
+          WHERE provider_tier_id = ? OR tier_slug = ?
+          ORDER BY problem_id, direction
+        `).all(providerId, slug)
+      : providerId
+        ? [this.#database.prepare(`
+            SELECT * FROM open_collective_tiers WHERE provider_tier_id = ?
+          `).get(providerId)].filter(Boolean)
+        : [this.#database.prepare(`
+            SELECT * FROM open_collective_tiers WHERE tier_slug = ?
+          `).get(slug)].filter(Boolean);
+    if (rows.length > 1) {
+      throw new LedgerError(
+        "tier-reference-conflict",
+        `Open Collective tier ID ${providerId} and slug ${slug} map to different pools.`,
+      );
+    }
+    return rows[0] ? mapOpenCollectiveTier(rows[0]) : undefined;
+  }
+
+  getIntakeCheckpoint(source) {
+    this.#assertOpen();
+    const parsedSource = requiredString(source, "source");
+    const row = this.#database.prepare(
+      "SELECT * FROM intake_checkpoints WHERE source = ?",
+    ).get(parsedSource);
+    return row ? mapIntakeCheckpoint(row) : Object.freeze({
+      source: parsedSource,
+      cursor: undefined,
+      scanSince: undefined,
+      highWaterAt: undefined,
+      updatedAt: undefined,
+    });
+  }
+
+  saveIntakeCheckpoint({
+    source,
+    cursor,
+    scanSince,
+    highWaterAt,
+    updatedAt,
+  }) {
+    const parsedSource = requiredString(source, "source");
+    const parsedCursor = cursor === undefined
+      ? undefined
+      : requiredString(cursor, "cursor");
+    const parsedScanSince = scanSince === undefined
+      ? undefined
+      : requiredTimestamp(scanSince, "scanSince");
+    if ((parsedCursor === undefined) !== (parsedScanSince === undefined)) {
+      throw new TypeError("cursor and scanSince must either both be set or both be absent.");
+    }
+    const parsedHighWater = highWaterAt === undefined
+      ? undefined
+      : requiredTimestamp(highWaterAt, "highWaterAt");
+    const timestamp = updatedAt === undefined
+      ? this.#now().iso
+      : requiredTimestamp(updatedAt, "updatedAt");
+    return this.#transaction(() => {
+      const previous = this.#database.prepare(
+        "SELECT * FROM intake_checkpoints WHERE source = ?",
+      ).get(parsedSource);
+      if (
+        previous?.high_water_at
+        && parsedHighWater
+        && Date.parse(parsedHighWater) < Date.parse(previous.high_water_at)
+      ) {
+        throw new LedgerError(
+          "checkpoint-regression",
+          `${parsedSource} high-water timestamp cannot move backward.`,
+        );
+      }
+      this.#database.prepare(`
+        INSERT INTO intake_checkpoints (
+          source,
+          cursor,
+          scan_since,
+          high_water_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(source) DO UPDATE SET
+          cursor = excluded.cursor,
+          scan_since = excluded.scan_since,
+          high_water_at = excluded.high_water_at,
+          updated_at = excluded.updated_at
+      `).run(
+        parsedSource,
+        parsedCursor ?? null,
+        parsedScanSince ?? null,
+        parsedHighWater ?? previous?.high_water_at ?? null,
+        timestamp,
+      );
+      return mapIntakeCheckpoint(this.#database.prepare(
+        "SELECT * FROM intake_checkpoints WHERE source = ?",
+      ).get(parsedSource));
+    });
+  }
+
+  recordSettlementRecord({
+    providerReference,
+    providerKind,
+    recordKind,
+    amountCents,
+    occurredAt,
+    payoutReference,
+    source,
+    observedAt,
+  }) {
+    const reference = requiredString(providerReference, "providerReference");
+    const provider = enumValue(
+      providerKind,
+      ["stripe", "open_collective_host"],
+      "providerKind",
+    );
+    const kind = enumValue(
+      recordKind,
+      ["contribution", "refund", "dispute", "payout"],
+      "recordKind",
+    );
+    const amount = asCents(amountCents, "amountCents", { allowNegative: true });
+    const occurred = requiredTimestamp(occurredAt, "occurredAt");
+    const payout = payoutReference === undefined
+      ? undefined
+      : requiredString(payoutReference, "payoutReference");
+    const sourceJson = canonicalJson(requiredObject(source, "source"));
+    const observed = observedAt === undefined
+      ? this.#now().iso
+      : requiredTimestamp(observedAt, "observedAt");
+    return this.#transaction(() => {
+      const existing = this.#database.prepare(
+        "SELECT * FROM settlement_records WHERE provider_reference = ?",
+      ).get(reference);
+      if (existing) {
+        const expected = {
+          provider_kind: provider,
+          record_kind: kind,
+          amount_cents: amount,
+          occurred_at: occurred,
+          payout_reference: payout ?? null,
+          source_json: sourceJson,
+        };
+        for (const [column, value] of Object.entries(expected)) {
+          if (existing[column] !== value) {
+            throw new LedgerError(
+              "idempotency-conflict",
+              `Settlement record ${reference} replay changed ${column}.`,
+            );
+          }
+        }
+        return { outcome: "duplicate", record: mapSettlementRecord(existing) };
+      }
+      this.#database.prepare(`
+        INSERT INTO settlement_records (
+          provider_reference,
+          provider_kind,
+          record_kind,
+          amount_cents,
+          occurred_at,
+          payout_reference,
+          source_json,
+          observed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        reference,
+        provider,
+        kind,
+        amount,
+        occurred,
+        payout ?? null,
+        sourceJson,
+        observed,
+      );
+      return {
+        outcome: "recorded",
+        record: mapSettlementRecord(this.#database.prepare(
+          "SELECT * FROM settlement_records WHERE provider_reference = ?",
+        ).get(reference)),
+      };
+    });
+  }
+
+  listSettlementRecords({ providerKind, through } = {}) {
+    this.#assertOpen();
+    const provider = providerKind === undefined
+      ? undefined
+      : enumValue(
+          providerKind,
+          ["stripe", "open_collective_host"],
+          "providerKind",
+        );
+    const cutoff = through === undefined
+      ? undefined
+      : requiredTimestamp(through, "through");
+    const rows = provider && cutoff
+      ? this.#database.prepare(`
+          SELECT * FROM settlement_records
+          WHERE provider_kind = ? AND occurred_at <= ?
+          ORDER BY occurred_at, provider_reference
+        `).all(provider, cutoff)
+      : provider
+        ? this.#database.prepare(`
+            SELECT * FROM settlement_records
+            WHERE provider_kind = ?
+            ORDER BY occurred_at, provider_reference
+          `).all(provider)
+        : cutoff
+          ? this.#database.prepare(`
+              SELECT * FROM settlement_records
+              WHERE occurred_at <= ?
+              ORDER BY occurred_at, provider_reference
+            `).all(cutoff)
+          : this.#database.prepare(`
+              SELECT * FROM settlement_records
+              ORDER BY occurred_at, provider_reference
+            `).all();
+    return Object.freeze(rows.map(mapSettlementRecord));
+  }
+
+  recordSettlementSnapshot({
+    snapshotId,
+    providerKind,
+    providerAccountId,
+    cutoffAt,
+    settledContributionCents,
+    sourceRecordCount,
+    sourceHash,
+    source,
+    createdAt,
+  }) {
+    const id = requiredString(snapshotId, "snapshotId");
+    const provider = enumValue(
+      providerKind,
+      ["stripe", "open_collective_host"],
+      "providerKind",
+    );
+    const account = requiredString(providerAccountId, "providerAccountId");
+    const cutoff = requiredTimestamp(cutoffAt, "cutoffAt");
+    const settled = asCents(settledContributionCents, "settledContributionCents");
+    const recordCount = nonnegativeInteger(sourceRecordCount, "sourceRecordCount");
+    const hash = requiredString(sourceHash, "sourceHash");
+    const sourceJson = canonicalJson(requiredObject(source, "source"));
+    const timestamp = createdAt === undefined
+      ? this.#now().iso
+      : requiredTimestamp(createdAt, "createdAt");
+    return this.#transaction(() => {
+      const existing = this.#database.prepare(
+        "SELECT * FROM settlement_snapshots WHERE snapshot_id = ?",
+      ).get(id);
+      if (existing) {
+        const expected = {
+          provider_kind: provider,
+          provider_account_id: account,
+          cutoff_at: cutoff,
+          settled_contribution_cents: settled,
+          source_record_count: recordCount,
+          source_hash: hash,
+          source_json: sourceJson,
+        };
+        for (const [column, value] of Object.entries(expected)) {
+          if (existing[column] !== value) {
+            throw new LedgerError(
+              "idempotency-conflict",
+              `Settlement snapshot ${id} replay changed ${column}.`,
+            );
+          }
+        }
+        return { outcome: "duplicate", snapshot: mapSettlementSnapshot(existing) };
+      }
+      const latest = this.#database.prepare(`
+        SELECT * FROM settlement_snapshots
+        WHERE provider_kind = ? AND provider_account_id = ?
+        ORDER BY cutoff_at DESC, created_at DESC
+        LIMIT 1
+      `).get(provider, account);
+      if (
+        latest
+        && (
+          Date.parse(cutoff) < Date.parse(latest.cutoff_at)
+          || settled < Number(latest.settled_contribution_cents)
+        )
+      ) {
+        throw new LedgerError(
+          "settlement-regression",
+          "Settlement cutoff and cumulative contribution total cannot regress.",
+        );
+      }
+      this.#database.prepare(`
+        INSERT INTO settlement_snapshots (
+          snapshot_id,
+          provider_kind,
+          provider_account_id,
+          cutoff_at,
+          settled_contribution_cents,
+          source_record_count,
+          source_hash,
+          source_json,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id,
+        provider,
+        account,
+        cutoff,
+        settled,
+        recordCount,
+        hash,
+        sourceJson,
+        timestamp,
+      );
+      return {
+        outcome: "recorded",
+        snapshot: mapSettlementSnapshot(this.#database.prepare(
+          "SELECT * FROM settlement_snapshots WHERE snapshot_id = ?",
+        ).get(id)),
+      };
+    });
+  }
+
+  latestSettlementSnapshot() {
+    this.#assertOpen();
+    const row = this.#database.prepare(`
+      SELECT * FROM settlement_snapshots
+      ORDER BY cutoff_at DESC, created_at DESC
+      LIMIT 1
+    `).get();
+    return row ? mapSettlementSnapshot(row) : undefined;
+  }
+
   getProblem(problemId) {
     this.#assertOpen();
     return mapProblem(this.#requireProblem(parseProblemId(problemId)));
@@ -1277,6 +1771,21 @@ export class SQLiteLedger {
     const adjustments = this.#database.prepare(
       "SELECT * FROM adjustments ORDER BY created_at, adjustment_id",
     ).all().map(mapAdjustment);
+    const openCollectiveTiers = this.#database.prepare(`
+      SELECT * FROM open_collective_tiers
+      ORDER BY problem_id, direction
+    `).all().map(mapOpenCollectiveTier);
+    const intakeCheckpoints = this.#database.prepare(`
+      SELECT * FROM intake_checkpoints ORDER BY source
+    `).all().map(mapIntakeCheckpoint);
+    const settlementRecords = this.#database.prepare(`
+      SELECT * FROM settlement_records
+      ORDER BY occurred_at, provider_reference
+    `).all().map(mapSettlementRecord);
+    const settlementSnapshots = this.#database.prepare(`
+      SELECT * FROM settlement_snapshots
+      ORDER BY cutoff_at, snapshot_id
+    `).all().map(mapSettlementSnapshot);
     return Object.freeze({
       problems: Object.freeze(problems),
       pools: Object.freeze(pools),
@@ -1286,6 +1795,10 @@ export class SQLiteLedger {
       reviewedResults: Object.freeze(reviewedResults),
       fundingEvents: Object.freeze(fundingEvents),
       adjustments: Object.freeze(adjustments),
+      openCollectiveTiers: Object.freeze(openCollectiveTiers),
+      intakeCheckpoints: Object.freeze(intakeCheckpoints),
+      settlementRecords: Object.freeze(settlementRecords),
+      settlementSnapshots: Object.freeze(settlementSnapshots),
       generalCreditCents: this.#generalBalance(),
       generalDebtCents: this.#generalDebt(),
       claimableGeneralCreditCents: this.#claimableGeneralBalance(),
@@ -1605,10 +2118,17 @@ export class SQLiteLedger {
   }
 
   #latestSettledContributionSnapshot() {
-    const row = this.#database.prepare(`
+    const reconciled = this.#database.prepare(`
+      SELECT settled_contribution_cents AS amount
+      FROM settlement_snapshots
+      ORDER BY cutoff_at DESC, created_at DESC
+      LIMIT 1
+    `).get();
+    if (reconciled) return Number(reconciled.amount);
+    const funded = this.#database.prepare(`
       SELECT MAX(settled_contribution_cents) AS amount FROM funding_events
     `).get();
-    return Number(row.amount ?? 0);
+    return Number(funded.amount ?? 0);
   }
 
   #treasuryAdjustmentTotals() {
@@ -1879,6 +2399,11 @@ export class SQLiteLedger {
             direction: row.intended_direction,
           })
         : Object.freeze({ kind: "general" }),
+      source: Object.freeze({
+        kind: row.source_kind ?? "manual",
+        attribution: row.attribution_kind ?? "manual",
+        metadata: row.source_json ? Object.freeze(JSON.parse(row.source_json)) : undefined,
+      }),
       waterlineExcludedCents: Number(row.waterline_excluded_cents),
       processed: state === "credited" || state === "partially_refunded"
         ? processing?.processed === true
@@ -1919,7 +2444,7 @@ export class SQLiteLedger {
     });
   }
 
-  #assertDonationReplay(existing, proposed) {
+  #assertDonationReplay(existing, proposed, source) {
     const intendedDestination = existing.intended_problem_id
       ? {
           kind: "pool",
@@ -1954,6 +2479,17 @@ export class SQLiteLedger {
           `Donation ${proposed.dedupId} replay changed ${key}.`,
         );
       }
+    }
+    const existingSource = {
+      kind: existing.source_kind ?? "manual",
+      attribution: existing.attribution_kind ?? "manual",
+      metadata: existing.source_json ? JSON.parse(existing.source_json) : undefined,
+    };
+    if (canonicalJson(existingSource) !== canonicalJson(source)) {
+      throw new LedgerError(
+        "idempotency-conflict",
+        `Donation ${proposed.dedupId} replay changed source attribution.`,
+      );
     }
   }
 
@@ -2016,7 +2552,22 @@ export class SQLiteLedger {
 
   #transaction(action) {
     this.#assertOpen();
-    this.#database.exec("BEGIN IMMEDIATE");
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        this.#database.exec("BEGIN IMMEDIATE");
+        break;
+      } catch (error) {
+        if (!isSqliteBusy(error) || attempt >= SQLITE_WRITE_RETRY_LIMIT) {
+          throw error;
+        }
+        Atomics.wait(
+          SQLITE_WRITE_RETRY_CLOCK,
+          0,
+          0,
+          Math.min(50, 2 + attempt),
+        );
+      }
+    }
     try {
       const result = action();
       this.#database.exec("COMMIT");
@@ -2030,6 +2581,12 @@ export class SQLiteLedger {
   #assertOpen() {
     if (this.#closed) throw new LedgerError("ledger-closed", "Ledger is closed.");
   }
+}
+
+function isSqliteBusy(error) {
+  return error?.code === "SQLITE_BUSY"
+    || error?.errcode === 5
+    || /database (?:is )?(?:locked|busy)/i.test(error?.message ?? "");
 }
 
 function parseClaimKey({ problemId, direction, claimTs }) {
@@ -2109,6 +2666,58 @@ function mapAdjustment(row) {
     note: row.note ?? undefined,
     createdAt: row.created_at,
     resolvedAt: row.resolved_at ?? undefined,
+  });
+}
+
+function mapOpenCollectiveTier(row) {
+  return Object.freeze({
+    providerTierId: row.provider_tier_id,
+    tierSlug: row.tier_slug,
+    problemId: row.problem_id,
+    direction: row.direction,
+    catalogRevision: Number(row.catalog_revision),
+    name: row.name,
+    description: row.description,
+    minimumAmountCents: Number(row.minimum_amount_cents),
+    checkoutUrl: row.checkout_url,
+    syncedAt: row.synced_at,
+  });
+}
+
+function mapIntakeCheckpoint(row) {
+  return Object.freeze({
+    source: row.source,
+    cursor: row.cursor ?? undefined,
+    scanSince: row.scan_since ?? undefined,
+    highWaterAt: row.high_water_at ?? undefined,
+    updatedAt: row.updated_at,
+  });
+}
+
+function mapSettlementRecord(row) {
+  return Object.freeze({
+    providerReference: row.provider_reference,
+    providerKind: row.provider_kind,
+    recordKind: row.record_kind,
+    amountCents: Number(row.amount_cents),
+    occurredAt: row.occurred_at,
+    payoutReference: row.payout_reference ?? undefined,
+    source: Object.freeze(JSON.parse(row.source_json)),
+    observedAt: row.observed_at,
+  });
+}
+
+function mapSettlementSnapshot(row) {
+  return Object.freeze({
+    snapshotId: row.snapshot_id,
+    providerKind: row.provider_kind,
+    providerAccountId: row.provider_account_id,
+    cutoffAt: row.cutoff_at,
+    settledContributionCents: Number(row.settled_contribution_cents),
+    sourceRecordCount: Number(row.source_record_count),
+    sourceHash: row.source_hash,
+    source: Object.freeze(JSON.parse(row.source_json)),
+    createdAt: row.created_at,
   });
 }
 
@@ -2193,6 +2802,78 @@ function optionalNonnegativeInteger(value, label) {
     throw new TypeError(`${label} must be a nonnegative safe integer.`);
   }
   return value;
+}
+
+function positiveInteger(value, label) {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new TypeError(`${label} must be a positive safe integer.`);
+  }
+  return value;
+}
+
+function nonnegativeInteger(value, label) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${label} must be a nonnegative safe integer.`);
+  }
+  return value;
+}
+
+function requiredObject(value, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${label} must be an object.`);
+  }
+  return value;
+}
+
+function requiredHttpUrl(value, label) {
+  let url;
+  try {
+    url = new URL(requiredString(value, label));
+  } catch {
+    throw new TypeError(`${label} must be a valid HTTP(S) URL.`);
+  }
+  if (!["http:", "https:"].includes(url.protocol)) {
+    throw new TypeError(`${label} must use HTTP or HTTPS.`);
+  }
+  return url.toString();
+}
+
+function enumValue(value, choices, label) {
+  if (!choices.includes(value)) {
+    throw new TypeError(`${label} must be one of ${choices.join(", ")}.`);
+  }
+  return value;
+}
+
+function normalizeDonationSource(value) {
+  if (value === undefined) {
+    return Object.freeze({
+      kind: "manual",
+      attribution: "manual",
+      metadata: undefined,
+    });
+  }
+  const source = requiredObject(value, "source");
+  const kind = enumValue(
+    source.kind,
+    ["manual", "open_collective"],
+    "source.kind",
+  );
+  const attribution = enumValue(
+    source.attribution,
+    ["manual", "mapped", "unattributed"],
+    "source.attribution",
+  );
+  if (kind === "open_collective" && attribution === "manual") {
+    throw new TypeError("Open Collective donations must be mapped or unattributed.");
+  }
+  if (kind === "manual" && attribution !== "manual") {
+    throw new TypeError("Manual donations must use manual attribution.");
+  }
+  const metadata = source.metadata === undefined
+    ? undefined
+    : structuredClone(requiredObject(source.metadata, "source.metadata"));
+  return Object.freeze({ kind, attribution, metadata });
 }
 
 function requiredTimestamp(value, label) {

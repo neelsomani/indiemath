@@ -3,6 +3,12 @@ import {
   assertRuntimeConfig,
 } from "#indiemath/shared";
 
+export {
+  buildOpenCollectiveTierSpecification,
+  OPEN_COLLECTIVE_MINIMUM_CENTS,
+  syncOpenCollectiveTiers,
+} from "./open-collective-tiers.mjs";
+
 export function createAdminRuntime({
   config,
   ledger,
@@ -16,6 +22,8 @@ export function createAdminRuntime({
   assertPort(openCollective, "Open Collective", [
     "healthcheck",
     "upsertTier",
+    "upsertTiers",
+    "listTiers",
     "listCreditTransactions",
   ]);
   assertPort(anthropicAdmin, "Anthropic Admin", ["healthcheck", "listUsage"]);
