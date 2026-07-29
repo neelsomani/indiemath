@@ -18,6 +18,12 @@ export function rawTranscriptKey({ problemId, direction, claimTs, sequence }) {
   }.jsonl`;
 }
 
+export function humanTranscriptKey({ problemId, direction, claimTs, sequence }) {
+  return `${claimPrefix(problemId, direction, claimTs)}/response-${
+    parsePositiveInteger(sequence, "sequence")
+  }.md`;
+}
+
 export function rawTranscriptPrefix({ problemId, direction, claimTs }) {
   return `${claimPrefix(problemId, direction, claimTs)}/`;
 }
@@ -50,6 +56,22 @@ export function databaseReplicaPrefix() {
   return "db-replica/";
 }
 
+export function r2ArtifactUri(key) {
+  return `r2://${parseObjectKey(key, "key")}`;
+}
+
+export function artifactKeyFromR2Uri(uri) {
+  if (
+    typeof uri !== "string"
+    || !uri.startsWith("r2://")
+    || uri.includes("?")
+    || uri.includes("#")
+  ) {
+    throw new TypeError("Artifact URI must be an r2:// object URI.");
+  }
+  return parseObjectKey(uri.slice("r2://".length), "uri");
+}
+
 export function artifactKeysForClaim(input) {
   return Object.freeze({
     rawTranscriptPrefix: rawTranscriptPrefix(input),
@@ -62,4 +84,18 @@ function claimPrefix(problemId, direction, claimTs) {
   return `transcripts/${parseProblemId(problemId)}/${parseDirection(direction)}/${
     parsePositiveInteger(claimTs, "claimTs")
   }`;
+}
+
+function parseObjectKey(value, label) {
+  if (
+    typeof value !== "string"
+    || !value
+    || value.startsWith("/")
+    || value.endsWith("/")
+    || value.includes("\\")
+    || value.split("/").some((segment) => !segment || segment === "." || segment === "..")
+  ) {
+    throw new TypeError(`${label} must be a safe nonempty R2 object key.`);
+  }
+  return value;
 }

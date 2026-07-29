@@ -5,6 +5,7 @@ import "#indiemath/anthropic";
 import "#indiemath/frontend";
 import "#indiemath/intake-publisher";
 import "#indiemath/ledger";
+import "#indiemath/r2";
 import "#indiemath/shared";
 import "#indiemath/workers";
 import {

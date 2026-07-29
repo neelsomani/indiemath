@@ -165,10 +165,14 @@ test("one cent of treasury coverage closes the marginal donation's refund window
     pool(fixture.ledger, firstProblem.id, "prove").claimableBalanceCents,
     5_000,
   );
-  assert.throws(() => fixture.ledger.beginRefund({
-    donationDedupId: "transaction-one-cent",
-    idempotencyReference: "refund-after-cent",
-  }), /processed and no longer refundable/);
+  assert.throws(
+    () => fixture.ledger.beginRefund({
+      donationDedupId: "transaction-one-cent",
+      idempotencyReference: "refund-after-cent",
+    }),
+    (error) => error.code === "donation-processed"
+      && /processed and no longer refundable/.test(error.message),
+  );
   assert.throws(() => fixture.ledger.claim({
     problemId: firstProblem.id,
     direction: "prove",

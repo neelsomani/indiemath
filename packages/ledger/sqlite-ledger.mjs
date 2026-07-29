@@ -898,10 +898,10 @@ export class SQLiteLedger {
       const waterlineStatus = this.#waterlineStatuses().find(
         (entry) => entry.dedupId === dedupId,
       );
-      if (waterlineStatus?.status === "processed") {
+      if (waterlineStatus?.processed === true) {
         throw new LedgerError(
           "donation-processed",
-          `Donation ${dedupId} has been processed and is no longer refundable.`,
+          `Donation ${dedupId} is processed and no longer refundable.`,
         );
       }
       const pendingRefundCents = this.#refundAmount(dedupId, "pending");
@@ -1686,6 +1686,16 @@ export class SQLiteLedger {
   getProblem(problemId) {
     this.#assertOpen();
     return mapProblem(this.#requireProblem(parseProblemId(problemId)));
+  }
+
+  listReviewedResults(problemId) {
+    this.#assertOpen();
+    const parsedProblemId = parseProblemId(problemId);
+    return Object.freeze(this.#database.prepare(`
+      SELECT * FROM reviewed_results
+      WHERE problem_id = ?
+      ORDER BY reviewed_at, direction, claim_ts
+    `).all(parsedProblemId).map((row) => this.#mapReviewedResult(row)));
   }
 
   getClaim(key) {
@@ -2625,8 +2635,13 @@ function mapProblem(row) {
     problemId: row.problem_id,
     catalogRevision: Number(row.catalog_revision),
     slug: row.slug,
+    domain: row.domain,
     title: row.title,
     statement: row.statement,
+    directions: Object.freeze({
+      prove: row.prove_prompt,
+      disprove: row.disprove_prompt,
+    }),
     status: row.status,
     pendingSolution: row.pending_solution_uri
       ? {

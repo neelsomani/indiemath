@@ -14,7 +14,9 @@ import {
   deriveDonationWaterline,
   deriveDonationRefundState,
   formatCents,
+  humanTranscriptKey,
   parseAdjustment,
+  artifactKeyFromR2Uri,
   parseClaim,
   parseDollarAmount,
   parseDonation,
@@ -22,6 +24,7 @@ import {
   parseReviewedResult,
   parseWorkerConfig,
   rawTranscriptKey,
+  r2ArtifactUri,
   reviewKey,
   validateWorkerFleet,
   WORKER_IDS,
@@ -265,6 +268,14 @@ test("artifact keys are centralized, exact, and path-safe", () => {
   assert.equal(
     rawTranscriptKey({ ...input, sequence: 3 }),
     "transcripts/math-001/disprove/1722124800000/raw-3.jsonl",
+  );
+  assert.equal(
+    humanTranscriptKey({ ...input, sequence: 3 }),
+    "transcripts/math-001/disprove/1722124800000/response-3.md",
+  );
+  assert.equal(
+    artifactKeyFromR2Uri(r2ArtifactUri(artifactKeysForClaim(input).solutionKey)),
+    artifactKeysForClaim(input).solutionKey,
   );
   assert.equal(reviewKey({
     problemId: "math-001",

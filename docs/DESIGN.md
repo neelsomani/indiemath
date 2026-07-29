@@ -98,6 +98,8 @@ Exactly four processes, `worker-1..4`, kept alive by any standard supervisor (sy
 
 No sleeps, no external reconstruction: the row's `spent` is authoritative to within one in-flight API call, and the budget headroom (§3) absorbs exactly that.
 
+Before issuing the first model request in either fresh dispatch or recovery, a `catalog-revision-mismatch` settles immediately at the claim row's current spend (zero for an unstarted claim), returns the reserved budget, and directs the worker to resample rather than running revised guidance against an old claim. A required rejection or conditional-review artifact that raises `review-artifact-unavailable` receives bounded retries for transient R2 failure; if it remains unavailable, the worker settles at the row's current spend and resamples, and it never runs with that reviewed material omitted.
+
 ### The run itself
 
 - Start/resume a Fable agent session with the directive (prove/disprove), both directions' compacted context plus any review rejection notes and conditional reviewed results from the ledger, and a `submit_solution` tool — call it if and only if you believe you have a complete, rigorous proof/disproof, with the full argument. The model's only terminal signal.
@@ -208,7 +210,7 @@ The donation UI is the project's Open Collective page: the site's problem cards 
 
 ## 6. Model outputs (R2)
 
-- Layout: `transcripts/{problem_id}/{direction}/{claim_ts}/raw-{seq}.jsonl`; `transcripts/{problem_id}/{direction}/compacted.md`; `solutions/{problem_id}/{direction}/{claim_ts}.md` — keyed per direction and per claim so an opposite-direction solve or a rejected-then-retried attempt can never clobber an artifact a pending review or rejection note references; `reviews/{problem_id}/{ts}.md`; `public/state.json` and `public/ledger.json` (the published ledger export); `db-replica/` (Litestream).
+- Layout: `transcripts/{problem_id}/{direction}/{claim_ts}/raw-{seq}.jsonl` for the exact request, every streamed event across retries, and the priced checkpoint; `transcripts/{problem_id}/{direction}/{claim_ts}/response-{seq}.md` for the corresponding human-readable segment; `transcripts/{problem_id}/{direction}/compacted.md`; `solutions/{problem_id}/{direction}/{claim_ts}.md` — keyed per direction and per claim so an opposite-direction solve or a rejected-then-retried attempt can never clobber an artifact a pending review or rejection note references; `reviews/{problem_id}/{ts}.md`; `public/state.json` and `public/ledger.json` (the published ledger export); `db-replica/` (Litestream).
 - Cross-direction context: feed the model both directions' `compacted.md` — a failed proof maps terrain for a disproof and vice versa; it's all public anyway.
 - Workers write; the frontend reads via CDN.
 
