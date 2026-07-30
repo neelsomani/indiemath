@@ -25,14 +25,33 @@ export class FakeStripe {
     };
   }
 
-  async refundCharge({ chargeId, amountCents, idempotencyReference }) {
+  async refundPayment({
+    chargeId,
+    paymentIntentId,
+    amountCents,
+    idempotencyReference,
+  }) {
+    if (Boolean(chargeId) === Boolean(paymentIntentId)) {
+      throw new TypeError(
+        "Exactly one of chargeId or paymentIntentId is required.",
+      );
+    }
+    const target = chargeId
+      ? { kind: "charge", id: chargeId }
+      : { kind: "payment_intent", id: paymentIntentId };
     const existing = this.#refunds.get(idempotencyReference);
     if (existing) {
-      if (existing.chargeId !== chargeId || existing.amountCents !== amountCents) {
+      if (
+        existing.target.kind !== target.kind
+        || existing.target.id !== target.id
+        || existing.amountCents !== amountCents
+      ) {
         throw new Error("Fake Stripe idempotency conflict.");
       }
       this.calls.push({
-        operation: "refundCharge",
+        operation: "refundPayment",
+        target,
+        amountCents,
         idempotencyReference,
         duplicate: true,
       });
@@ -40,13 +59,16 @@ export class FakeStripe {
     }
     const refund = {
       providerReference: `re_fake_${String(this.#refunds.size + 1).padStart(4, "0")}`,
-      chargeId,
+      target,
+      ...(chargeId ? { chargeId } : { paymentIntentId }),
       amountCents,
       status: "succeeded",
     };
     this.#refunds.set(idempotencyReference, refund);
     this.calls.push({
-      operation: "refundCharge",
+      operation: "refundPayment",
+      target,
+      amountCents,
       idempotencyReference,
       duplicate: false,
     });

@@ -9,6 +9,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { fingerprintSiteAssets } from "./fingerprint-site-assets.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outputDir = path.join(rootDir, "dist");
@@ -18,7 +19,9 @@ const requiredFiles = [
   "index.html",
   "ledger.html",
   "terms.html",
+  "404.html",
   "_headers",
+  "_redirects",
   "robots.txt",
   "sitemap.xml",
   "favicon.ico",
@@ -36,21 +39,7 @@ for (const file of requiredFiles) {
 await cp(path.join(rootDir, "assets"), path.join(clientDir, "assets"), {
   recursive: true,
 });
-const publicResearchSeedDirectory = path.join(
-  clientDir,
-  "seed",
-  "fable-math",
-);
-await mkdir(publicResearchSeedDirectory, { recursive: true });
-await cp(
-  path.join(rootDir, "seed", "fable-math", "manifest.json"),
-  path.join(publicResearchSeedDirectory, "manifest.json"),
-);
-await cp(
-  path.join(rootDir, "seed", "fable-math", "contexts"),
-  path.join(publicResearchSeedDirectory, "contexts"),
-  { recursive: true },
-);
+const contentAddressedAssets = await fingerprintSiteAssets(clientDir);
 await copyOptional("og.png");
 
 const workerSource = await readFile(
@@ -61,8 +50,8 @@ await writeFile(path.join(serverDir, "index.js"), workerSource, "utf8");
 
 const html = await readFile(path.join(clientDir, "index.html"), "utf8");
 for (const required of [
-  "assets/site.css",
-  "assets/site.js",
+  `assets/${contentAddressedAssets.siteStylesName}`,
+  `assets/${contentAddressedAssets.siteScriptName}`,
   "ledger.html",
   "terms.html",
   "https://opencollective.com/indiemath",
@@ -72,26 +61,17 @@ for (const required of [
   }
 }
 const siteScript = await readFile(
-  path.join(clientDir, "assets", "site.js"),
+  path.join(
+    clientDir,
+    "assets",
+    contentAddressedAssets.siteScriptName,
+  ),
   "utf8",
 );
-if (!siteScript.includes("seed/fable-math/manifest.json")) {
-  throw new Error("Built frontend is missing the research manifest.");
-}
-const fableManifest = JSON.parse(await readFile(
-  path.join(clientDir, "seed", "fable-math", "manifest.json"),
-  "utf8",
-));
-for (const response of fableManifest.responses) {
-  await readFile(
-    path.join(
-      clientDir,
-      "seed",
-      "fable-math",
-      response.contextArtifact,
-    ),
-    "utf8",
-  );
+if (
+  !siteScript.includes('"public/prior-research/manifest.json"')
+) {
+  throw new Error("Built frontend is missing the R2 prior-research manifest.");
 }
 
 console.log(`Built static site in ${outputDir}.`);

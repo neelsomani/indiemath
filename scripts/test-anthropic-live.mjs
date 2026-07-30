@@ -403,8 +403,8 @@ test("live Fable compaction drops pre-compaction context on continuation", {
     const compactionInputTokens = totalInputTokens(compactionResponse.usage);
     const continuationInputTokens = totalInputTokens(continuationResponse.usage);
     assert.ok(
-      compactionInputTokens >= 150_000,
-      `expected at least 150K pre-compaction tokens, saw ${compactionInputTokens}`,
+      compactionInputTokens >= 50_000,
+      `expected at least 50K pre-compaction tokens, saw ${compactionInputTokens}`,
     );
     assert.ok(
       continuationInputTokens < compactionInputTokens / 2,

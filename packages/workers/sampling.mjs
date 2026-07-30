@@ -2,12 +2,12 @@ import { randomBytes } from "node:crypto";
 import {
   addCents,
   assertPort,
+  DEFAULT_RUN_BUDGET_CENTS,
   MAX_RUN_BUDGET_CENTS,
   MINIMUM_RUN_BUDGET_CENTS,
   parseDirection,
   parseProblemId,
   parseWorkerId,
-  STANDARD_RUN_BUDGET_CENTS,
   WORKER_IDLE_POLL_INTERVAL_MS,
 } from "#indiemath/shared";
 
@@ -17,6 +17,7 @@ const CLAIM_RACE_CODES = new Set([
   "insufficient-pool-balance",
   "pair-already-claimed",
   "problem-not-open",
+  "problem-not-current",
   "worker-already-claimed",
 ]);
 const UINT64_SPACE = 1n << 64n;
@@ -41,13 +42,13 @@ export function selectSamplingDecision(snapshot, {
   }
 
   const ruleA = eligible.filter(
-    (pair) => pair.runnableCents >= STANDARD_RUN_BUDGET_CENTS,
+    (pair) => pair.runnableCents >= DEFAULT_RUN_BUDGET_CENTS,
   );
-  if (capacity >= STANDARD_RUN_BUDGET_CENTS && ruleA.length > 0) {
+  if (ruleA.length > 0) {
     return selectedDecision({
       rule: "A",
       pair: weightedChoice(ruleA, draw),
-      runBudgetCents: STANDARD_RUN_BUDGET_CENTS,
+      runBudgetCents: Math.min(DEFAULT_RUN_BUDGET_CENTS, capacity),
       fundingMode: "pool-only",
       candidateCount: ruleA.length,
       snapshot: parsed,
@@ -65,7 +66,7 @@ export function selectSamplingDecision(snapshot, {
       runBudgetCents: Math.min(
         pair.runnableCents,
         capacity,
-        MAX_RUN_BUDGET_CENTS,
+        DEFAULT_RUN_BUDGET_CENTS,
       ),
       fundingMode: "pool-only",
       candidateCount: ruleB.length,
@@ -84,7 +85,7 @@ export function selectSamplingDecision(snapshot, {
       runBudgetCents: Math.min(
         parsed.claimableGeneralCreditCents,
         capacity,
-        MAX_RUN_BUDGET_CENTS,
+        DEFAULT_RUN_BUDGET_CENTS,
       ),
       fundingMode: "general-only",
       candidateCount: eligible.length,
@@ -95,7 +96,7 @@ export function selectSamplingDecision(snapshot, {
   return noSelection("idle", parsed, eligible, {
     reason: eligible.length === 0
       ? "no-eligible-pairs"
-      : "no-claimable-balance-at-minimum-run",
+      : "no-claimable-balance-for-safe-request",
   });
 }
 

@@ -69,6 +69,7 @@ export class FakeLedger {
         generalCreditCents: 0,
         generalDebtCents: 0,
         settledSpendCents: 0,
+        approximateRunSpendCents: 0,
         liveReservationCents: 0,
         adjustmentOutflowsCents: 0,
         accountedCents: 0,

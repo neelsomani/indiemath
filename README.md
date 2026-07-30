@@ -18,11 +18,9 @@ publisher; the frontend does not maintain a second problem list.
   Anthropic Messages integration.
 - `packages/intake-publisher/` — Open Collective intake and atomic public-data
   publication.
+- `packages/ramp/` — read-only cleared-card spend observation for the public
+  accounting pipeline.
 - `index.html`, `ledger.html`, and `assets/` — the static public frontend.
-- `seed/fable-math/` — prior FableMath work and compact carry-forward context
-  used to resume research and presented through the same transcript UI as
-  IndieMath runs; the static build includes the manifest and carry-forward
-  transcripts, not the final-only source artifacts.
 - `scripts/indiemath.mjs` — privileged administration commands.
 - `docs/DESIGN.md` and `docs/ADMIN_RUNBOOK.md` — system contract and operating
   procedures.
@@ -52,11 +50,17 @@ npm run build
 Copy `.env.example` to `.env` only for local commands that need external
 services. Never commit the resulting file or provider credentials.
 
+The privileged operations surface is `./indiemath`; see
+[`docs/ADMIN_RUNBOOK.md`](docs/ADMIN_RUNBOOK.md) for replay-safe reviews,
+refunds, treasury funding, provider reconciliation, Ramp observation, and
+backup/restore.
+
 ## Contribution lifecycle
 
 A contribution is credited immediately and normally processed within 1–2
 business days after receipt, Monday through Friday. While its public badge says
-**received**, it has not been staged for compute and may be refunded on request.
+**received**, it has not been staged for compute and may be refunded on request
+for its full net amount after processing fees; partial refunds are not offered.
 Once it says **processed**, it is committed and final. See
 [Terms & Conditions](terms.html) for the governing policy.
 

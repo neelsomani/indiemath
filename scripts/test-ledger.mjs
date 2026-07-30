@@ -55,20 +55,18 @@ test("received donations are refundable until the shared waterline reaches them"
   });
   const pending = fixture.ledger.beginRefund({
     donationDedupId: "transaction-refund",
-    requestedAmountCents: 4_000,
     idempotencyReference: "refund-1",
   });
-  assert.equal(pending.adjustment.amountCents, -4_000);
+  assert.equal(pending.adjustment.amountCents, -10_000);
   assert.equal(
     fixture.ledger.beginRefund({
       donationDedupId: "transaction-refund",
-      requestedAmountCents: 4_000,
       idempotencyReference: "refund-1",
     }).outcome,
     "duplicate",
   );
   assertPool(fixture.ledger, firstProblem.id, "prove", {
-    balanceCents: 6_000,
+    balanceCents: 0,
     claimableBalanceCents: 0,
   });
   fixture.ledger.assertConservation();
@@ -78,28 +76,13 @@ test("received donations are refundable until the shared waterline reaches them"
     providerReference: "provider-refund-1",
   });
   const afterRefund = fixture.ledger.getDonation("transaction-refund");
-  assert.equal(afterRefund.state, "partially_refunded");
-  assert.equal(afterRefund.refundedCents, 4_000);
-  assert.equal(afterRefund.processed, false);
-  assert.equal(afterRefund.refundEligible, true);
-
-  fixture.ledger.treasuryFund({
-    amountCents: 6_000,
-    externalReference: "fund-1",
-    settledContributionCents: 10_000,
-  });
-  const processed = fixture.ledger.getDonation("transaction-refund");
-  assert.equal(processed.processed, true);
-  assert.equal(processed.refundEligible, false);
-  assertPool(fixture.ledger, firstProblem.id, "prove", {
-    balanceCents: 6_000,
-    claimableBalanceCents: 6_000,
-  });
+  assert.equal(afterRefund.state, "refunded");
+  assert.equal(afterRefund.refundedCents, 10_000);
+  assert.equal(afterRefund.refundEligible, false);
   assert.throws(() => fixture.ledger.beginRefund({
     donationDedupId: "transaction-refund",
-    requestedAmountCents: 1,
     idempotencyReference: "refund-too-late",
-  }), /processed and no longer refundable/);
+  }), /has no refundable balance/);
 
   assert.deepEqual(
     pick(fixture.ledger.treasuryStatus({
@@ -112,15 +95,55 @@ test("received donations are refundable until the shared waterline reaches them"
       "availableToFundCents",
     ]),
     {
-      completedRefundCents: 4_000,
+      completedRefundCents: 10_000,
       pendingRefundCents: 0,
-      fundingEventCents: 6_000,
+      fundingEventCents: 0,
       settledButUnfundedCents: 0,
       availableToFundCents: 0,
     },
   );
   fixture.ledger.assertConservation();
 });
+
+test("partial refunds are rejected and full refunds consume the exact pool boundary",
+  async (context) => {
+    const fixture = await createFixture(context);
+    donate(fixture.ledger, {
+      dedupId: "transaction-full-refund-boundary",
+      problemId: firstProblem.id,
+      netCents: 10_000,
+    });
+    assert.throws(() => fixture.ledger.beginRefund({
+      donationDedupId: "transaction-full-refund-boundary",
+      requestedAmountCents: 4_000,
+      idempotencyReference: "refund-boundary-partial",
+    }), /Only full refunds are supported/);
+    const full = fixture.ledger.quoteRefund({
+      donationDedupId: "transaction-full-refund-boundary",
+    });
+    assert.equal(full.refundableCents, 10_000);
+    const final = fixture.ledger.beginRefund({
+      donationDedupId: "transaction-full-refund-boundary",
+      idempotencyReference: "refund-boundary-final",
+    });
+    assert.equal(final.adjustment.amountCents, -10_000);
+    fixture.ledger.completeRefund({
+      idempotencyReference: "refund-boundary-final",
+      providerReference: "provider-boundary-final",
+    });
+
+    const donation = fixture.ledger.getDonation(
+      "transaction-full-refund-boundary",
+    );
+    assert.equal(donation.state, "refunded");
+    assert.equal(donation.refundedCents, 10_000);
+    assert.equal(donation.refundEligible, false);
+    assertPool(fixture.ledger, firstProblem.id, "prove", {
+      balanceCents: 0,
+      claimableBalanceCents: 0,
+    });
+    fixture.ledger.assertConservation();
+  });
 
 test("canceled refunds restore their exact destination without opening claimable funds", async (context) => {
   const fixture = await createFixture(context);
@@ -131,7 +154,6 @@ test("canceled refunds restore their exact destination without opening claimable
   });
   fixture.ledger.beginRefund({
     donationDedupId: "transaction-cancel",
-    requestedAmountCents: 2_000,
     idempotencyReference: "refund-cancel",
   });
   fixture.ledger.cancelRefund({
@@ -161,6 +183,26 @@ test("one cent of treasury coverage closes the marginal donation's refund window
   const donation = fixture.ledger.getDonation("transaction-one-cent");
   assert.equal(donation.processed, true);
   assert.equal(donation.refundEligible, false);
+  assert.deepEqual(
+    fixture.ledger.quoteRefund({
+      donationDedupId: "transaction-one-cent",
+    }),
+    {
+      donationDedupId: "transaction-one-cent",
+      requestedAmountCents: undefined,
+      completedRefundCents: 0,
+      pendingRefundCents: 0,
+      effectiveNetCents: 5_000,
+      remainingDonationCents: 5_000,
+      destinationBalanceCents: 5_000,
+      processed: true,
+      processingStatus: "processed",
+      eligible: false,
+      refundableCents: 0,
+      reason: "donation-processed",
+      message: "Donation transaction-one-cent is processed and no longer refundable.",
+    },
+  );
   assert.equal(
     pool(fixture.ledger, firstProblem.id, "prove").claimableBalanceCents,
     5_000,
@@ -257,8 +299,8 @@ test("claims enforce capacity, exclusion, monotonic spend, and residue attributi
     finalSpentCents: 3_001,
   });
   assert.deepEqual(secondSettlement.residue, {
-    poolCents: 0,
-    generalCents: 3_999,
+    poolCents: 3_999,
+    generalCents: 0,
   });
   fixture.ledger.assertConservation();
 });
@@ -482,37 +524,38 @@ test("resolve, competing solutions, conditional review, and unconditional sweep 
   fixture.ledger.assertConservation();
 });
 
-test("the $50 residue boundary preserves source attribution exactly", async (context) => {
-  for (const [suffix, residueCents, expected] of [
-    ["floor", 5_000, { poolCents: 5_000, generalCents: 0 }],
-    ["dust", 4_999, { poolCents: 0, generalCents: 4_999 }],
-  ]) {
-    const fixture = await createFixture(context);
-    donate(fixture.ledger, {
-      dedupId: `transaction-residue-${suffix}`,
-      problemId: firstProblem.id,
-      netCents: 10_000,
-    });
-    fixture.ledger.treasuryFund({
-      amountCents: 10_000,
-      externalReference: `fund-residue-${suffix}`,
-      settledContributionCents: 10_000,
-    });
-    const claim = fixture.ledger.claim({
-      problemId: firstProblem.id,
-      direction: "prove",
-      runBudgetCents: 10_000,
-      workerId: "worker-1",
-      fundingMode: "pool-only",
-    });
-    const settlement = fixture.ledger.settle({
-      ...claim,
-      finalSpentCents: 10_000 - residueCents,
-    });
-    assert.deepEqual(settlement.residue, expected);
-    fixture.ledger.assertConservation();
-  }
-});
+test("the request-headroom residue boundary preserves source attribution exactly",
+  async (context) => {
+    for (const [suffix, residueCents, expected] of [
+      ["floor", 1_601, { poolCents: 1_601, generalCents: 0 }],
+      ["dust", 1_600, { poolCents: 0, generalCents: 1_600 }],
+    ]) {
+      const fixture = await createFixture(context);
+      donate(fixture.ledger, {
+        dedupId: `transaction-residue-${suffix}`,
+        problemId: firstProblem.id,
+        netCents: 10_000,
+      });
+      fixture.ledger.treasuryFund({
+        amountCents: 10_000,
+        externalReference: `fund-residue-${suffix}`,
+        settledContributionCents: 10_000,
+      });
+      const claim = fixture.ledger.claim({
+        problemId: firstProblem.id,
+        direction: "prove",
+        runBudgetCents: 10_000,
+        workerId: "worker-1",
+        fundingMode: "pool-only",
+      });
+      const settlement = fixture.ledger.settle({
+        ...claim,
+        finalSpentCents: 10_000 - residueCents,
+      });
+      assert.deepEqual(settlement.residue, expected);
+      fixture.ledger.assertConservation();
+    }
+  });
 
 test("chargeback shortfalls become visible debt without consuming received refunds", async (context) => {
   const fixture = await createFixture(context);
@@ -654,12 +697,10 @@ test("adjustment replays are exact or rejected without changing balances", async
 
   fixture.ledger.beginRefund({
     donationDedupId: "transaction-adjustment-replays",
-    requestedAmountCents: 2_000,
     idempotencyReference: "refund-cancel-replay",
   });
   assert.equal(fixture.ledger.beginRefund({
     donationDedupId: "transaction-adjustment-replays",
-    requestedAmountCents: 2_000,
     idempotencyReference: "refund-cancel-replay",
   }).outcome, "duplicate");
   assert.throws(() => fixture.ledger.beginRefund({
@@ -682,7 +723,6 @@ test("adjustment replays are exact or rejected without changing balances", async
 
   fixture.ledger.beginRefund({
     donationDedupId: "transaction-adjustment-replays",
-    requestedAmountCents: 3_000,
     idempotencyReference: "refund-complete-replay",
   });
   fixture.ledger.completeRefund({
@@ -698,20 +738,25 @@ test("adjustment replays are exact or rejected without changing balances", async
     providerReference: "different-provider-refund",
   }), /another provider reference/);
 
+  donate(fixture.ledger, {
+    dedupId: "transaction-dispute-replays",
+    problemId: firstProblem.id,
+    netCents: 5_000,
+  });
   fixture.ledger.dispute({
-    donationDedupId: "transaction-adjustment-replays",
+    donationDedupId: "transaction-dispute-replays",
     externalReference: "dispute-replay",
     amountCents: 1_000,
     note: "Partial chargeback.",
   });
   assert.equal(fixture.ledger.dispute({
-    donationDedupId: "transaction-adjustment-replays",
+    donationDedupId: "transaction-dispute-replays",
     externalReference: "dispute-replay",
     amountCents: 1_000,
     note: "Partial chargeback.",
   }).outcome, "duplicate");
   assert.throws(() => fixture.ledger.dispute({
-    donationDedupId: "transaction-adjustment-replays",
+    donationDedupId: "transaction-dispute-replays",
     externalReference: "dispute-replay",
     amountCents: 999,
     note: "Partial chargeback.",
@@ -741,7 +786,6 @@ test("varied operation sequences conserve money after every transition", async (
     const fixture = await createFixture(context);
     const firstNet = 5_000 + Math.floor(random() * 5_001);
     const secondNet = 5_000 + Math.floor(random() * 5_001);
-    const refundRequest = 1 + Math.floor(random() * firstNet);
 
     donate(fixture.ledger, {
       dedupId: `property-${seed}-first`,
@@ -751,14 +795,13 @@ test("varied operation sequences conserve money after every transition", async (
     fixture.ledger.assertConservation();
     fixture.ledger.beginRefund({
       donationDedupId: `property-${seed}-first`,
-      requestedAmountCents: refundRequest,
       idempotencyReference: `property-${seed}-refund`,
     });
     fixture.ledger.assertConservation();
 
     let completedRefundCents = 0;
     if (seed % 2 === 0) {
-      completedRefundCents = refundRequest;
+      completedRefundCents = firstNet;
       fixture.ledger.completeRefund({
         idempotencyReference: `property-${seed}-refund`,
         providerReference: `property-${seed}-provider-refund`,
@@ -829,6 +872,191 @@ test("varied operation sequences conserve money after every transition", async (
     fixture.ledger.assertConservation();
   }
 });
+
+test("cumulative Anthropic spend reconciliation applies only the incremental correction",
+  async (context) => {
+    const fixture = await createFixture(context);
+    donate(fixture.ledger, {
+      dedupId: "transaction-anthropic-spend",
+      problemId: firstProblem.id,
+      netCents: 10_000,
+    });
+    fixture.ledger.treasuryFund({
+      amountCents: 10_000,
+      externalReference: "fund-anthropic-spend",
+      settledContributionCents: 10_000,
+    });
+
+    const firstClaim = fixture.ledger.claim({
+      problemId: firstProblem.id,
+      direction: "prove",
+      runBudgetCents: 1_000,
+      workerId: "worker-1",
+      fundingMode: "pool-only",
+    });
+    checkpointResponse(fixture.ledger, firstClaim, {
+      messageId: "msg-anthropic-spend-1",
+      requestStartedAt: "2026-07-27T20:00:00.000Z",
+      costCents: 1_000,
+    });
+    fixture.ledger.settle({
+      ...firstClaim,
+      finalSpentCents: 1_000,
+    });
+
+    const first = fixture.ledger.reconcileAnthropicSpend({
+      cutoffAt: "2026-07-27T20:30:00.000Z",
+      actualSpendCents: 900,
+      externalReference: "anthropic-statement-1",
+      note: "Cumulative provider statement 1.",
+    });
+    assert.equal(first.outcome, "completed");
+    assert.deepEqual(
+      pick(first.reconciliation, [
+        "ledgerAppliedSpendCents",
+        "actualSpendCents",
+        "targetCorrectionCents",
+        "appliedCorrectionCents",
+      ]),
+      {
+        ledgerAppliedSpendCents: 1_000,
+        actualSpendCents: 900,
+        targetCorrectionCents: 100,
+        appliedCorrectionCents: 100,
+      },
+    );
+    assert.equal(first.adjustment.amountCents, 100);
+    assert.equal(fixture.ledger.inspect().generalCreditCents, 100);
+    assert.equal(fixture.ledger.inspect().spendableCapacityCents, 9_100);
+    assert.equal(fixture.ledger.reconcileAnthropicSpend({
+      cutoffAt: "2026-07-27T20:30:00.000Z",
+      actualSpendCents: 900,
+      externalReference: "anthropic-statement-1",
+      note: "Cumulative provider statement 1.",
+    }).outcome, "duplicate");
+
+    const secondClaim = fixture.ledger.claim({
+      problemId: firstProblem.id,
+      direction: "prove",
+      runBudgetCents: 1_000,
+      workerId: "worker-2",
+      fundingMode: "pool-only",
+    });
+    checkpointResponse(fixture.ledger, secondClaim, {
+      messageId: "msg-anthropic-spend-2",
+      requestStartedAt: "2026-07-27T21:00:00.000Z",
+      costCents: 1_000,
+    });
+    fixture.ledger.settle({
+      ...secondClaim,
+      finalSpentCents: 1_000,
+    });
+
+    const second = fixture.ledger.reconcileAnthropicSpend({
+      cutoffAt: "2026-07-27T21:30:00.000Z",
+      actualSpendCents: 1_950,
+      externalReference: "anthropic-statement-2",
+      note: "Cumulative provider statement 2.",
+    });
+    assert.deepEqual(
+      pick(second.reconciliation, [
+        "ledgerAppliedSpendCents",
+        "actualSpendCents",
+        "targetCorrectionCents",
+        "appliedCorrectionCents",
+      ]),
+      {
+        ledgerAppliedSpendCents: 2_000,
+        actualSpendCents: 1_950,
+        targetCorrectionCents: 50,
+        appliedCorrectionCents: -50,
+      },
+    );
+    assert.equal(second.adjustment.amountCents, -50);
+    assert.equal(fixture.ledger.inspect().generalCreditCents, 50);
+    assert.equal(fixture.ledger.inspect().spendableCapacityCents, 8_050);
+
+    const unchanged = fixture.ledger.reconcileAnthropicSpend({
+      cutoffAt: "2026-07-27T22:00:00.000Z",
+      actualSpendCents: 1_950,
+      externalReference: "anthropic-statement-3",
+      note: "No new provider usage.",
+    });
+    assert.equal(unchanged.reconciliation.appliedCorrectionCents, 0);
+    assert.equal(unchanged.adjustment, undefined);
+    assert.throws(() => fixture.ledger.reconcileAnthropicSpend({
+      cutoffAt: "2026-07-27T22:30:00.000Z",
+      actualSpendCents: 1_949,
+      externalReference: "anthropic-statement-regression",
+      note: "Invalid cumulative amount.",
+    }), /cannot move backward/);
+    assert.throws(() => fixture.ledger.reconcileAnthropicSpend({
+      cutoffAt: "2026-07-27T22:00:00.000Z",
+      actualSpendCents: 1_950,
+      externalReference: "anthropic-statement-cutoff-conflict",
+      note: "Conflicting source.",
+    }), /already belongs to/);
+
+    const state = fixture.ledger.inspect();
+    assert.equal(state.anthropicSpendReconciliations.length, 3);
+    assert.equal(state.adjustments.filter(
+      (adjustment) => adjustment.reasonCode === "reconciliation",
+    ).length, 2);
+    assert.equal(fixture.ledger.accountingSnapshot().approximateRunSpendCents, 2_000);
+    fixture.ledger.assertConservation();
+  });
+
+test("Ramp spend snapshots are cumulative, replay-safe observations",
+  async (context) => {
+    const fixture = await createFixture(context);
+    const cardFingerprint = "a".repeat(64);
+    const firstHash = "b".repeat(64);
+    const secondHash = "c".repeat(64);
+
+    const first = fixture.ledger.recordRampSpendSnapshot({
+      cardFingerprint,
+      cutoffAt: "2026-07-27T20:00:00.000Z",
+      actualSpendCents: 12_345,
+      sourceTransactionCount: 2,
+      sourceHash: firstHash,
+    });
+    assert.equal(first.outcome, "recorded");
+    assert.equal(fixture.ledger.recordRampSpendSnapshot({
+      cardFingerprint,
+      cutoffAt: "2026-07-27T20:30:00.000Z",
+      actualSpendCents: 12_345,
+      sourceTransactionCount: 2,
+      sourceHash: firstHash,
+    }).outcome, "duplicate");
+    const second = fixture.ledger.recordRampSpendSnapshot({
+      cardFingerprint,
+      cutoffAt: "2026-07-27T21:00:00.000Z",
+      actualSpendCents: 15_000,
+      sourceTransactionCount: 3,
+      sourceHash: secondHash,
+    });
+    assert.equal(second.outcome, "recorded");
+    assert.deepEqual(
+      fixture.ledger.latestRampSpendSnapshot(),
+      second.snapshot,
+    );
+    assert.throws(() => fixture.ledger.recordRampSpendSnapshot({
+      cardFingerprint,
+      cutoffAt: "2026-07-27T20:59:59.000Z",
+      actualSpendCents: 15_000,
+      sourceTransactionCount: 3,
+      sourceHash: "d".repeat(64),
+    }), /cannot move backward/);
+    assert.throws(() => fixture.ledger.recordRampSpendSnapshot({
+      cardFingerprint: "e".repeat(64),
+      cutoffAt: "2026-07-27T21:30:00.000Z",
+      actualSpendCents: 15_000,
+      sourceTransactionCount: 3,
+      sourceHash: "f".repeat(64),
+    }), /fingerprint changed/);
+    assert.equal(fixture.ledger.inspect().rampSpendSnapshots.length, 2);
+    fixture.ledger.assertConservation();
+  });
 
 test("concurrent claims serialize through the partial unique index", async (context) => {
   const fixture = await createFixture(context);
@@ -1022,6 +1250,30 @@ function donate(ledger, {
 }
 
 let donationSequence = 0;
+
+function checkpointResponse(ledger, claim, {
+  messageId,
+  requestStartedAt,
+  costCents,
+}) {
+  return ledger.checkpointResponse({
+    ...claim,
+    request: {
+      model: "claude-fable-5",
+      messages: [{ role: "user", content: "Private request payload." }],
+    },
+    response: {
+      id: messageId,
+      model: "claude-fable-5",
+      content: [{ type: "text", text: "Private response payload." }],
+      stop_reason: "end_turn",
+      usage: { input_tokens: 10, output_tokens: 20 },
+    },
+    requestId: `request-${messageId}`,
+    requestStartedAt,
+    costCents,
+  });
+}
 
 function pool(ledger, problemId, direction) {
   return ledger.inspect().pools.find((candidate) => (

@@ -12,6 +12,23 @@ export {
   fundTreasuryFromReconciliation,
   refreshTreasuryStatus,
 } from "./treasury.mjs";
+export {
+  createLedgerBackup,
+  restoreLocalLedgerBackup,
+  verifyLedgerDatabase,
+} from "./backup.mjs";
+export { inspectLedger } from "./inspection.mjs";
+export {
+  reconcileOpenCollectiveCredits,
+} from "./open-collective-reconciliation.mjs";
+export {
+  checkOperationalHealth,
+  readSystemdServiceStates,
+  requiredProductionServices,
+  REQUIRED_PRODUCTION_SERVICES,
+} from "./monitoring.mjs";
+export { verifyLaunchReadiness } from "./launch-verification.mjs";
+export { applyReviewVerdict } from "./review.mjs";
 
 export function createAdminRuntime({
   config,

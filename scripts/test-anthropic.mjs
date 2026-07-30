@@ -25,13 +25,20 @@ import {
   parseAnthropicEventStream,
   priceAnthropicUsage,
   reconcileClaimUsage,
+  republishPublicResearchArtifacts,
+  renewedTaskBudgetMessages,
   retryAnthropicOperation,
   runClaimUsageReconciliation,
   runFableClaim,
+  taskBudgetTokensForCents,
 } from "#indiemath/anthropic";
 import { FakeAnthropicMessages, FakeR2 } from "#indiemath/fakes";
 import { openLedger } from "#indiemath/ledger";
-import { compactedContextKey, solutionKey } from "#indiemath/shared";
+import {
+  compactedContextKey,
+  researchSessionTranscriptKey,
+  solutionKey,
+} from "#indiemath/shared";
 import {
   readCatalog,
   validateCatalog,
@@ -47,7 +54,7 @@ const pricingTable = await loadAnthropicPricingTable(
   path.join(rootDir, "pricing", "anthropic.json"),
 );
 
-test("Fable request pins the current model features and terminal tool contract", () => {
+test("Fable request pins the current model features and reserves termination for solutions", () => {
   const systemPrompt = buildFableSystemPrompt({
     problem,
     direction: "prove",
@@ -73,6 +80,7 @@ test("Fable request pins the current model features and terminal tool contract",
     total: 64_000,
     remaining: 50_000,
   });
+  assert.deepEqual(request.cache_control, { type: "ephemeral" });
   assert.equal(request.context_management.edits[0].type, "compact_20260112");
   assert.equal(request.context_management.edits[0].pause_after_compaction, true);
   assert.match(
@@ -82,13 +90,64 @@ test("Fable request pins the current model features and terminal tool contract",
   assert.ok(request.tools.some((tool) => tool.type === "code_execution_20260521"));
   assert.ok(request.tools.some((tool) => tool.type === "web_fetch_20260318"));
   assert.ok(request.tools.some((tool) => tool.name === "submit_solution"));
-  assert.match(systemPrompt, /only terminal signal/i);
+  assert.ok(!request.tools.some((tool) => tool.name === "submit_no_solution"));
+  assert.match(systemPrompt, /genuinely new analysis/i);
+  assert.match(systemPrompt, /end_turn is only an API turn boundary/i);
+  assert.match(systemPrompt, /until the claim's dollar budget/i);
   assert.match(systemPrompt, /compaction summary is a nonterminal/i);
   assert.match(systemPrompt, /unjustified interchange/);
   assert.deepEqual(ANTHROPIC_BETAS, [
     "task-budgets-2026-03-13",
     "compact-2026-01-12",
   ]);
+});
+
+test("a $50 financial claim receives a $50 output-equivalent task budget", () => {
+  assert.equal(taskBudgetTokensForCents({
+    budgetCents: 5_000,
+    pricingTable,
+  }), 1_000_000);
+});
+
+test("task-budget renewal starts from the latest pair compaction, not a reset sequence", () => {
+  const messages = renewedTaskBudgetMessages([
+    {
+      claimTs: 1,
+      sequence: 1,
+      response: { content: [{ type: "compaction", content: "OLD COMPACTION" }] },
+    },
+    {
+      claimTs: 1,
+      sequence: 2,
+      response: { content: [{ type: "text", text: "OLD FOLLOWUP" }] },
+    },
+    {
+      claimTs: 2,
+      sequence: 1,
+      response: {
+        content: [{
+          type: "compaction",
+          content:
+            "LATEST COMPACTION\n\nBudget is exhausted; ending the funded turn.\n\n"
+            + "This is the terminal state; the filed negative record is final. Ending the turn.\n\n"
+            + "Investigation complete within funded budget; this is the terminal record.",
+        }],
+      },
+    },
+    {
+      claimTs: 2,
+      sequence: 2,
+      response: { content: [{ type: "text", text: "LATEST FOLLOWUP" }] },
+    },
+  ]);
+  const text = messages[0].content;
+  assert.doesNotMatch(text, /OLD COMPACTION|OLD FOLLOWUP/);
+  assert.match(text, /LATEST COMPACTION/);
+  assert.match(text, /LATEST FOLLOWUP/);
+  assert.doesNotMatch(
+    text.split("The prior model task-token countdown ended")[0],
+    /budget is exhausted|ending (?:the funded |the )?turn|terminal state|record is final|terminal record/i,
+  );
 });
 
 test("production configuration constructs the real Messages and Admin clients", async () => {
@@ -620,7 +679,7 @@ test("completed response checkpointing is exactly once across replay, reopen, an
   assert.equal(alert.type, "anthropic-usage-drift");
 });
 
-test("Fable loop resumes server turns, persists compaction, and accepts only submit_solution", async (context) => {
+test("Fable loop resumes server turns, persists compaction, and validates terminal payloads", async (context) => {
   const fixture = await createClaimFixture(context);
   const r2 = new FakeR2();
   const messages = new FakeAnthropicMessages({
@@ -717,6 +776,14 @@ test("Fable loop resumes server turns, persists compaction, and accepts only sub
 
   assert.equal(result.outcome, "submitted_solution");
   assert.equal(messages.requests.length, 6);
+  assert.equal(
+    messages.requests[0].context_management.edits[0].type,
+    "compact_20260112",
+  );
+  assert.equal(
+    Object.hasOwn(messages.requests[0].output_config.task_budget, "remaining"),
+    false,
+  );
   assert.match(
     messages.requests[1].messages.at(-1).content[0].content,
     /Invalid submit_solution payload/,
@@ -747,7 +814,7 @@ test("Fable loop resumes server turns, persists compaction, and accepts only sub
   );
   assert.match(
     messages.requests[5].messages.at(-1).content,
-    /only accepted terminal signal/,
+    /produce genuinely new work/,
   );
   assert.equal(fixture.ledger.listClaimResponses(fixture.claim).length, 6);
   assert.equal(fixture.ledger.getClaim(fixture.claim).settled, true);
@@ -764,6 +831,184 @@ test("Fable loop resumes server turns, persists compaction, and accepts only sub
   );
 });
 
+test("end_turn task exhaustion renews the same claim and produces new work", async (context) => {
+  const fixture = await createClaimFixture(context);
+  const r2 = new FakeR2();
+  const messages = new FakeAnthropicMessages({
+    responses: [
+      message({
+        id: "msg_task_budget_exhausted",
+        content: [{
+          type: "text",
+          text: "Terminal: budget exhausted; record final; no disproof claimed.",
+        }],
+      }),
+      message({
+        id: "msg_new_research",
+        content: [{
+          type: "text",
+          text: "A genuinely new lemma eliminates the remaining finite obstruction.",
+        }],
+      }),
+      message({
+        id: "msg_solution_after_renewal",
+        stopReason: "tool_use",
+        content: [{
+          type: "tool_use",
+          id: "tool_solution_after_renewal",
+          name: "submit_solution",
+          input: {
+            title: "Renewed result",
+            summary: "The renewed task continued the same claim.",
+            argument_markdown: "Here is the complete renewed argument.",
+            verification_notes: "Checked after task-budget renewal.",
+          },
+        }],
+      }),
+    ],
+  });
+
+  const result = await runFableClaim({
+    claim: fixture.claim,
+    problem,
+    messagesClient: messages,
+    ledger: fixture.ledger,
+    r2,
+    pricingTable,
+  });
+
+  assert.equal(result.outcome, "submitted_solution");
+  assert.equal(messages.requests.length, 3);
+  assert.deepEqual(messages.requests[0].output_config.task_budget, {
+    type: "tokens",
+    total: 1_000_000,
+  });
+  assert.equal(messages.requests[0].context_management.edits[0].type, "compact_20260112");
+  assert.equal(messages.requests[1].context_management, undefined);
+  assert.ok(messages.requests[1].output_config.task_budget.remaining < 1_000_000);
+  assert.equal(messages.requests[1].messages.length, 1);
+  assert.doesNotMatch(
+    JSON.stringify(messages.requests[1].messages),
+    /Terminal: budget exhausted/,
+  );
+  assert.match(
+    JSON.stringify(messages.requests[1].messages),
+    /same funded claim remains active/,
+  );
+  assert.equal(
+    Object.hasOwn(messages.requests[2].output_config.task_budget, "remaining"),
+    false,
+  );
+  assert.equal(messages.requests[2].context_management.edits[0].type, "compact_20260112");
+  assert.equal(fixture.ledger.listClaimResponses(fixture.claim).length, 3);
+  const session = await r2.getObject(researchSessionTranscriptKey({
+    problemId: problem.id,
+    direction: "prove",
+  }));
+  const publicTranscript = await session.text();
+  assert.doesNotMatch(publicTranscript, /budget exhausted/i);
+  assert.match(publicTranscript, /genuinely new lemma/i);
+  const republished = await republishPublicResearchArtifacts({
+    ledger: fixture.ledger,
+    r2,
+  });
+  assert.equal(republished.responseArtifactCount, 3);
+  assert.equal(republished.researchSessionCount, 1);
+});
+
+test("a terminal no-solution report settles without claiming the problem", async (context) => {
+  const fixture = await createClaimFixture(context);
+  const r2 = new FakeR2();
+  const messages = new FakeAnthropicMessages({
+    responses: [message({
+      id: "msg_no_solution",
+      stopReason: "tool_use",
+      content: [{
+        type: "tool_use",
+        id: "tool_no_solution",
+        name: "submit_no_solution",
+        input: {
+          title: "No proof obtained",
+          summary: "The canonical statement remains open.",
+          research_markdown: "Several candidate constructions were eliminated.",
+          verification_notes: "This report explicitly makes no solution claim.",
+        },
+      }],
+    })],
+  });
+
+  const result = await runFableClaim({
+    claim: fixture.claim,
+    problem,
+    messagesClient: messages,
+    ledger: fixture.ledger,
+    r2,
+    pricingTable,
+    taskBudgetTokens: 20_000,
+  });
+
+  assert.equal(result.outcome, "no_solution");
+  assert.equal(result.report.summary, "The canonical statement remains open.");
+  assert.equal(fixture.ledger.getClaim(fixture.claim).settled, true);
+  assert.equal(fixture.ledger.getClaim(fixture.claim).solutionUri, undefined);
+  assert.equal(fixture.ledger.getProblem(problem.id).status, "Open");
+  await assert.rejects(() => r2.getObject(solutionKey(fixture.claim)));
+  const human = await r2.getObject(compactedContextKey({
+    problemId: problem.id,
+    direction: "prove",
+  }));
+  assert.match(await human.text(), /canonical statement remains open/i);
+});
+
+test("a checkpointed no-solution report settles safely after worker restart", async (context) => {
+  const fixture = await createClaimFixture(context);
+  const r2 = new FakeR2();
+  const response = message({
+    id: "msg_no_solution_crash",
+    stopReason: "tool_use",
+    content: [{
+      type: "tool_use",
+      id: "tool_no_solution_crash",
+      name: "submit_no_solution",
+      input: {
+        title: "No proof obtained",
+        summary: "No complete result was found.",
+        research_markdown: "Useful partial work was preserved.",
+        verification_notes: "No solution claim is made.",
+      },
+    }],
+  });
+  await assert.rejects(
+    runFableClaim({
+      claim: fixture.claim,
+      problem,
+      messagesClient: new FakeAnthropicMessages({ responses: [response] }),
+      ledger: fixture.ledger,
+      r2,
+      pricingTable,
+      taskBudgetTokens: 20_000,
+      onBoundary({ name }) {
+        if (name === "after_r2_checkpoint_mirror") throw new Error("crash");
+      },
+    }),
+    { name: "WorkerProcessCrashError" },
+  );
+
+  const resumedMessages = new FakeAnthropicMessages();
+  const result = await runFableClaim({
+    claim: fixture.claim,
+    problem,
+    messagesClient: resumedMessages,
+    ledger: fixture.ledger,
+    r2,
+    pricingTable,
+    taskBudgetTokens: 20_000,
+  });
+  assert.equal(result.outcome, "no_solution");
+  assert.equal(resumedMessages.requests.length, 0);
+  assert.equal(fixture.ledger.getProblem(problem.id).status, "Open");
+});
+
 test("the runner issues no request across its budget and lease hard stops", async (context) => {
   const budgetFixture = await createClaimFixture(context);
   budgetFixture.ledger.checkpointResponse({
@@ -771,7 +1016,7 @@ test("the runner issues no request across its budget and lease hard stops", asyn
     request: minimalRequest(),
     response: message({
       id: "msg_consumed_to_headroom",
-      stopReason: "end_turn",
+      stopReason: "pause_turn",
       content: [{ type: "text", text: "Checkpointed work." }],
     }),
     requestStartedAt: new Date(budgetFixture.claim.claimTs).toISOString(),
@@ -901,16 +1146,17 @@ test("a claimed worker completes through the real HTTP Messages client", async (
   );
 });
 
-test("a later funded claim receives the prior claim's persisted research context", async (context) => {
+test("a later funded claim renews from a compact carry-forward of prior work", async (context) => {
   const fixture = await createClaimFixture(context);
   const r2 = new FakeR2();
+  const refusedResponse = message({
+    id: "msg_refused",
+    stopReason: "refusal",
+    content: [{ type: "text", text: "Preserve this useful failed approach." }],
+    usage: { input_tokens: 0, output_tokens: 0 },
+  });
   const refused = new FakeAnthropicMessages({
-    responses: [message({
-      id: "msg_refused",
-      stopReason: "refusal",
-      content: [{ type: "text", text: "Preserve this useful failed approach." }],
-      usage: { input_tokens: 0, output_tokens: 0 },
-    })],
+    responses: [refusedResponse],
   });
   const first = await runFableClaim({
     claim: fixture.claim,
@@ -961,10 +1207,15 @@ test("a later funded claim receives the prior claim's persisted research context
     pricingTable,
     taskBudgetTokens: 20_000,
   });
-  assert.match(
-    submit.requests[0].messages[0].content,
-    /Preserve this useful failed approach/,
-  );
+  assert.equal(submit.requests[0].messages.length, 1);
+  assert.equal(submit.requests[0].context_management, undefined);
+  assert.equal(submit.requests[0].output_config.task_budget.remaining, 20_000);
+  assert.match(JSON.stringify(submit.requests[0].messages), /Preserve this useful failed approach/);
+  const session = await r2.getObject(researchSessionTranscriptKey({
+    problemId: problem.id,
+    direction: "prove",
+  }));
+  assert.match(await session.text(), /Preserve this useful failed approach/);
 });
 
 function message({

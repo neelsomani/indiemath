@@ -15,7 +15,10 @@ import {
 } from "#indiemath/admin-cli";
 import { FakeStripe } from "#indiemath/fakes";
 import { openLedger } from "#indiemath/ledger";
-import { readTreasuryPublication } from "#indiemath/intake-publisher";
+import {
+  buildPublicDocuments,
+  readTreasuryPublication,
+} from "#indiemath/intake-publisher";
 import {
   readCatalog,
   validateCatalog,
@@ -28,6 +31,139 @@ const catalog = validateCatalog(
   await readCatalog(path.join(rootDir, "problems", "catalog.json")),
 );
 const firstProblem = catalog.problems[0];
+
+test("a refund before payout settlement publishes without inventing settled cash",
+  async (context) => {
+    const fixture = await createFixture(context);
+    donate(fixture.ledger, {
+      dedupId: "txn-refund-before-settlement",
+      chargeId: "ch_refund_before_settlement",
+      netCents: 5_000,
+      creditedAt: "2026-08-03T00:00:00.000Z",
+    });
+    fixture.ledger.beginRefund({
+      donationDedupId: "txn-refund-before-settlement",
+      idempotencyReference: "refund-before-settlement",
+    });
+    fixture.ledger.completeRefund({
+      idempotencyReference: "refund-before-settlement",
+      providerReference: "re_refund_before_settlement",
+    });
+
+    const treasury = readTreasuryPublication(fixture.ledger);
+    assert.equal(treasury.completedRefundCents, 5_000);
+    assert.equal(treasury.settledCompletedRefundCents, 0);
+    assert.equal(treasury.settledButUnfundedCents, 0);
+    assert.equal(treasury.availableToFundCents, 0);
+
+    const documents = buildPublicDocuments({
+      source: fixture.ledger.publicationSnapshot(),
+      generatedAt: "2026-08-03T00:01:00.000Z",
+    });
+    const publicLedger = JSON.parse(documents.ledgerBody);
+    const donation = publicLedger.donations.find(
+      (item) => item.dedupId === "txn-refund-before-settlement",
+    );
+    assert.equal(donation.processingStatus, "refunded");
+    assert.equal(donation.refundedCents, 5_000);
+    assert.equal(donation.unprocessedCents, 0);
+    assert.equal(publicLedger.adjustments[0].status, "completed");
+    fixture.ledger.assertConservation();
+  });
+
+test("owner-prefunded staging is explicit, FIFO, and offset by later settlement",
+  async (context) => {
+    const fixture = await createFixture(context);
+    donate(fixture.ledger, {
+      dedupId: "txn-owner-first",
+      chargeId: "ch_owner_first",
+      netCents: 5_000,
+      creditedAt: "2026-08-03T00:00:00.000Z",
+    });
+    donate(fixture.ledger, {
+      dedupId: "txn-owner-second",
+      chargeId: "ch_owner_second",
+      netCents: 5_000,
+      creditedAt: "2026-08-03T00:01:00.000Z",
+    });
+    const unsettledStripe = new FakeStripe({ accountId: "acct_owner" });
+
+    await assert.rejects(fundTreasuryFromReconciliation({
+      ledger: fixture.ledger,
+      stripe: unsettledStripe,
+      amountCents: 5_000,
+      externalReference: "ramp-owner-without-flag",
+      through: "2026-08-03T23:59:59.000Z",
+    }), /exceeds available-to-fund 0/);
+
+    fixture.ledger.beginRefund({
+      donationDedupId: "txn-owner-second",
+      idempotencyReference: "refund-owner-pending",
+    });
+    await assert.rejects(fundTreasuryFromReconciliation({
+      ledger: fixture.ledger,
+      stripe: unsettledStripe,
+      amountCents: 5_000,
+      externalReference: "ramp-owner-pending-refund",
+      ownerPrefunded: true,
+      through: "2026-08-03T23:59:59.000Z",
+    }), /blocked while any refund is pending/);
+    fixture.ledger.cancelRefund({
+      idempotencyReference: "refund-owner-pending",
+      note: "Owner-prefunding regression test cleanup.",
+    });
+
+    const prefunded = await fundTreasuryFromReconciliation({
+      ledger: fixture.ledger,
+      stripe: unsettledStripe,
+      amountCents: 5_000,
+      externalReference: "ramp-owner-first",
+      ownerPrefunded: true,
+      through: "2026-08-03T23:59:59.000Z",
+    });
+    assert.equal(prefunded.funding.outcome, "funded");
+    assert.equal(prefunded.funding.fundingEvent.fundingSource, "owner_prefunded");
+    assert.equal(prefunded.treasury.outstandingOwnerAdvanceCents, 5_000);
+    assert.equal(prefunded.treasury.availableToFundCents, 0);
+    assert.equal(fixture.ledger.getDonation("txn-owner-first").processed, true);
+    assert.equal(fixture.ledger.getDonation("txn-owner-second").processed, false);
+    assert.equal(
+      fixture.ledger.inspect().fundingEvents[0].fundingSource,
+      "owner_prefunded",
+    );
+    assert.throws(() => fixture.ledger.treasuryFund({
+      amountCents: 5_001,
+      externalReference: "ramp-owner-over-received",
+      settledContributionCents: 0,
+      fundingSource: "owner_prefunded",
+    }), /exceeds remaining received contribution coverage 5000/);
+
+    const firstSettlement = ownerSettlementRecords().slice(0, 2);
+    const firstSettled = await refreshTreasuryStatus({
+      ledger: fixture.ledger,
+      stripe: new FakeStripe({
+        accountId: "acct_owner",
+        settlementRecords: firstSettlement,
+      }),
+      through: "2026-08-05T23:59:59.000Z",
+    });
+    assert.equal(firstSettled.treasury.settledContributionCents, 5_000);
+    assert.equal(firstSettled.treasury.outstandingOwnerAdvanceCents, 0);
+    assert.equal(firstSettled.treasury.availableToFundCents, 0);
+
+    const bothSettled = await refreshTreasuryStatus({
+      ledger: fixture.ledger,
+      stripe: new FakeStripe({
+        accountId: "acct_owner",
+        settlementRecords: ownerSettlementRecords(),
+      }),
+      through: "2026-08-06T23:59:59.000Z",
+    });
+    assert.equal(bothSettled.treasury.settledContributionCents, 10_000);
+    assert.equal(bothSettled.treasury.outstandingOwnerAdvanceCents, 0);
+    assert.equal(bothSettled.treasury.availableToFundCents, 5_000);
+    fixture.ledger.assertConservation();
+  });
 
 test("multi-day settlement, refunds, funding, and reservations share one treasury view",
   async (context) => {
@@ -54,8 +190,11 @@ test("multi-day settlement, refunds, funding, and reservations share one treasur
       settledContributionCents: 0,
       completedRefundCents: 0,
       pendingRefundCents: 0,
+      settledCompletedRefundCents: 0,
+      settledPendingRefundCents: 0,
       fundingEventCents: 0,
       settledButUnfundedCents: 0,
+      outstandingOwnerAdvanceCents: 0,
       availableToFundCents: 0,
       spendableCapacityCents: 0,
       liveReservationsCents: 0,
@@ -89,11 +228,10 @@ test("multi-day settlement, refunds, funding, and reservations share one treasur
 
     fixture.ledger.beginRefund({
       donationDedupId: "txn-stage6-second",
-      requestedAmountCents: 2_000,
       idempotencyReference: "refund-stage6",
     });
-    assert.equal(fixture.ledger.treasuryStatus().pendingRefundCents, 2_000);
-    assert.equal(fixture.ledger.treasuryStatus().availableToFundCents, 8_000);
+    assert.equal(fixture.ledger.treasuryStatus().pendingRefundCents, 5_000);
+    assert.equal(fixture.ledger.treasuryStatus().availableToFundCents, 5_000);
 
     const funded = await fundTreasuryFromReconciliation({
       ledger: fixture.ledger,
@@ -101,21 +239,21 @@ test("multi-day settlement, refunds, funding, and reservations share one treasur
         accountId: "acct_stage6",
         settlementRecords: paidRecords,
       }),
-      amountCents: 8_000,
+      amountCents: 5_000,
       externalReference: "ramp-stage6",
       through: "2026-08-05T23:59:59.000Z",
     });
     assert.equal(funded.funding.outcome, "funded");
-    assert.equal(funded.funding.fundingEvent.amountCents, 8_000);
+    assert.equal(funded.funding.fundingEvent.amountCents, 5_000);
     assert.equal(funded.treasury.availableToFundCents, 0);
-    assert.equal(funded.treasury.spendableCapacityCents, 8_000);
+    assert.equal(funded.treasury.spendableCapacityCents, 5_000);
     assert.equal(
       fixture.ledger.getDonation("txn-stage6-first").processed,
       true,
     );
     assert.equal(
       fixture.ledger.getDonation("txn-stage6-second").processed,
-      true,
+      false,
     );
     assert.throws(() => fixture.ledger.beginRefund({
       donationDedupId: "txn-stage6-first",
@@ -141,7 +279,7 @@ test("multi-day settlement, refunds, funding, and reservations share one treasur
             providerReference: "txn-stage6-refund",
             providerKind: "stripe",
             recordKind: "refund",
-            amountCents: -2_000,
+            amountCents: -5_000,
             occurredAt: "2026-08-06T00:00:00.000Z",
             payoutReference: "po_stage6",
             chargeId: "ch_stage6_second",
@@ -151,18 +289,18 @@ test("multi-day settlement, refunds, funding, and reservations share one treasur
       }),
       through: "2026-08-06T23:59:59.000Z",
     });
-    assert.equal(afterRefund.treasury.completedRefundCents, 2_000);
+    assert.equal(afterRefund.treasury.completedRefundCents, 5_000);
     assert.equal(afterRefund.treasury.pendingRefundCents, 0);
     assert.equal(afterRefund.treasury.settledButUnfundedCents, 0);
 
     const claim = fixture.ledger.claim({
       problemId: firstProblem.id,
       direction: "prove",
-      runBudgetCents: 8_000,
+      runBudgetCents: 5_000,
       workerId: "worker-1",
       fundingMode: "pool-only",
     });
-    assert.equal(readTreasuryPublication(fixture.ledger).liveReservationsCents, 8_000);
+    assert.equal(readTreasuryPublication(fixture.ledger).liveReservationsCents, 5_000);
     assert.equal(
       readTreasuryPublication(fixture.ledger).runsPausedPendingSettlement,
       true,
@@ -172,7 +310,7 @@ test("multi-day settlement, refunds, funding, and reservations share one treasur
       finalSpentCents: 3_000,
     });
     assert.equal(readTreasuryPublication(fixture.ledger).liveReservationsCents, 0);
-    assert.equal(readTreasuryPublication(fixture.ledger).spendableCapacityCents, 5_000);
+    assert.equal(readTreasuryPublication(fixture.ledger).spendableCapacityCents, 2_000);
     assert.equal(
       readTreasuryPublication(fixture.ledger).runsPausedPendingSettlement,
       false,
@@ -280,6 +418,55 @@ test("treasury CLI derives settlement, accepts exact dollars, and has no manual 
     assert.equal(ledger.inspect().fundingEvents.length, 1);
     assert.equal(ledger.inspect().fundingEvents[0].amountCents, 5_000);
     assert.equal(ledger.getDonation("txn-stage6-cli").processed, true);
+  });
+
+test("treasury CLI requires the explicit owner-prefunded flag for unsettled cash",
+  async (context) => {
+    const fixture = await createFixture(context);
+    donate(fixture.ledger, {
+      dedupId: "txn-owner-cli",
+      chargeId: "ch_owner_cli",
+      netCents: 5_000,
+      creditedAt: "2026-08-03T00:00:00.000Z",
+    });
+    fixture.ledger.close();
+    fixture.closed = true;
+
+    const server = createStripeServer({
+      chargeId: "ch_owner_cli",
+      amountCents: 5_000,
+      settled: false,
+    });
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    context.after(() => new Promise((resolve) => server.close(resolve)));
+    const environment = {
+      ...process.env,
+      INDIEMATH_DB: fixture.databasePath,
+      STRIPE_SECRET_KEY: "rk_test_owner",
+      STRIPE_ACCOUNT_ID: "acct_owner_cli",
+      STRIPE_API_BASE_URL: `http://127.0.0.1:${server.address().port}/v1/`,
+    };
+    const result = JSON.parse((await execFile(process.execPath, [
+      path.join(rootDir, "scripts", "indiemath.mjs"),
+      "treasury",
+      "fund",
+      "50",
+      "--ref",
+      "ramp-owner-cli",
+      "--owner-prefunded",
+      "--db",
+      fixture.databasePath,
+    ], { env: environment })).stdout);
+    assert.equal(result.funding.fundingEvent.fundingSource, "owner_prefunded");
+    assert.equal(result.treasury.outstandingOwnerAdvanceCents, 5_000);
+
+    const ledger = await openLedger({ databasePath: fixture.databasePath });
+    context.after(() => ledger.close());
+    assert.equal(ledger.inspect().fundingEvents[0].fundingSource, "owner_prefunded");
+    assert.equal(ledger.getDonation("txn-owner-cli").processed, true);
   });
 
 test("publisher snapshot rejects a treasury pause flag that disagrees with capacity",
@@ -399,7 +586,50 @@ function settlementRecords() {
   ];
 }
 
-function createStripeServer({ chargeId, amountCents }) {
+function ownerSettlementRecords() {
+  return [
+    {
+      providerReference: "po_owner_first",
+      providerKind: "stripe",
+      recordKind: "payout",
+      amountCents: 5_000,
+      occurredAt: "2026-08-05T00:00:00.000Z",
+      payoutReference: "po_owner_first",
+      source: { id: "po_owner_first" },
+    },
+    {
+      providerReference: "txn-owner-first-balance",
+      providerKind: "stripe",
+      recordKind: "contribution",
+      amountCents: 5_000,
+      occurredAt: "2026-08-05T00:00:00.000Z",
+      payoutReference: "po_owner_first",
+      chargeId: "ch_owner_first",
+      source: { id: "ch_owner_first" },
+    },
+    {
+      providerReference: "po_owner_second",
+      providerKind: "stripe",
+      recordKind: "payout",
+      amountCents: 5_000,
+      occurredAt: "2026-08-06T00:00:00.000Z",
+      payoutReference: "po_owner_second",
+      source: { id: "po_owner_second" },
+    },
+    {
+      providerReference: "txn-owner-second-balance",
+      providerKind: "stripe",
+      recordKind: "contribution",
+      amountCents: 5_000,
+      occurredAt: "2026-08-06T00:00:00.000Z",
+      payoutReference: "po_owner_second",
+      chargeId: "ch_owner_second",
+      source: { id: "ch_owner_second" },
+    },
+  ];
+}
+
+function createStripeServer({ chargeId, amountCents, settled = true }) {
   const occurred = Math.floor(Date.parse("2026-08-05T00:00:00.000Z") / 1_000);
   return createServer((request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
@@ -415,7 +645,7 @@ function createStripeServer({ chargeId, amountCents }) {
     }
     if (url.pathname === "/v1/payouts") {
       response.end(JSON.stringify({
-        data: [{
+        data: settled ? [{
           id: "po_stage6_cli",
           object: "payout",
           amount: amountCents,
@@ -424,14 +654,14 @@ function createStripeServer({ chargeId, amountCents }) {
           currency: "usd",
           status: "paid",
           type: "bank_account",
-        }],
+        }] : [],
         has_more: false,
       }));
       return;
     }
     if (url.pathname === "/v1/balance_transactions") {
       response.end(JSON.stringify({
-        data: [{
+        data: settled ? [{
           id: "txn_stage6_cli_balance",
           object: "balance_transaction",
           amount: amountCents,
@@ -444,7 +674,7 @@ function createStripeServer({ chargeId, amountCents }) {
           status: "available",
           type: "charge",
           source: { id: chargeId, object: "charge" },
-        }],
+        }] : [],
         has_more: false,
       }));
       return;

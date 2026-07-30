@@ -101,6 +101,48 @@ export function assertCatalogRevisionAdvance(base, candidate) {
   };
 }
 
+export function diffCatalogs(base, candidate) {
+  const revision = assertCatalogRevisionAdvance(base, candidate);
+  const baseProblems = new Map(base.problems.map((problem) => [problem.id, problem]));
+  const candidateProblems = new Map(
+    candidate.problems.map((problem) => [problem.id, problem]),
+  );
+  const added = candidate.problems
+    .filter((problem) => !baseProblems.has(problem.id))
+    .map((problem) => problem.id)
+    .sort();
+  const removed = base.problems
+    .filter((problem) => !candidateProblems.has(problem.id))
+    .map((problem) => problem.id)
+    .sort();
+  const changed = candidate.problems
+    .filter((problem) => {
+      const previous = baseProblems.get(problem.id);
+      return previous && stableStringify(previous) !== stableStringify(problem);
+    })
+    .map((problem) => {
+      const previous = baseProblems.get(problem.id);
+      return Object.freeze({
+        problemId: problem.id,
+        identityChanged: problemIdentityHash(previous) !== problemIdentityHash(problem),
+        fields: Object.freeze(problemChangedFields(previous, problem)),
+      });
+    })
+    .sort((left, right) => left.problemId.localeCompare(right.problemId));
+  const catalogFields = ["direction_contract", "review_policy"]
+    .filter((field) => (
+      stableStringify(base[field]) !== stableStringify(candidate[field])
+    ));
+  return Object.freeze({
+    ...revision,
+    catalogFields: Object.freeze(catalogFields),
+    added: Object.freeze(added),
+    removed: Object.freeze(removed),
+    changed: Object.freeze(changed),
+    safeToSync: changed.every((problem) => !problem.identityChanged),
+  });
+}
+
 export function stableStringify(value) {
   if (Array.isArray(value)) {
     return `[${value.map(stableStringify).join(",")}]`;
@@ -238,6 +280,15 @@ function normalizeClaim(statement) {
 function withoutCatalogRevision(catalog) {
   const { catalog_revision: _catalogRevision, ...content } = catalog;
   return content;
+}
+
+function problemChangedFields(base, candidate) {
+  return [...new Set([
+    ...Object.keys(base),
+    ...Object.keys(candidate),
+  ])].filter((field) => (
+    stableStringify(base[field]) !== stableStringify(candidate[field])
+  )).sort();
 }
 
 function sha256(value) {

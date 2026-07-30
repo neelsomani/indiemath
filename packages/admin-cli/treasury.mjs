@@ -28,10 +28,14 @@ export async function fundTreasuryFromReconciliation({
   stripe,
   amountCents,
   externalReference,
+  ownerPrefunded = false,
   through,
   pageSize,
 }) {
   assertPort(ledger, "ledger", ["treasuryFund", "treasuryStatus"]);
+  if (typeof ownerPrefunded !== "boolean") {
+    throw new TypeError("ownerPrefunded must be a boolean.");
+  }
   const amount = asCents(amountCents, "amountCents");
   if (amount === 0) throw new RangeError("amountCents must be positive.");
   const refreshed = await refreshTreasuryStatus({
@@ -45,6 +49,7 @@ export async function fundTreasuryFromReconciliation({
     externalReference,
     settledContributionCents:
       refreshed.reconciliation.settledContributionCents,
+    fundingSource: ownerPrefunded ? "owner_prefunded" : "settled",
   });
   return Object.freeze({
     reconciliation: refreshed.reconciliation,

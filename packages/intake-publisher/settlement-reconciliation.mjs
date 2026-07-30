@@ -101,31 +101,12 @@ export async function reconcileStripeSettlements({
     );
   }
 
-  const providerRefundsByCharge = new Set(records
-    .filter((record) => record.recordKind === "refund")
-    .map((record) => record.source.chargeId)
-    .filter(Boolean));
-  const unmatchedCompletedRefunds = state.adjustments.filter((adjustment) => {
-    if (adjustment.reasonCode !== "refund" || adjustment.status !== "completed") {
-      return false;
-    }
-    const donation = donationsById.get(adjustment.donationDedupId);
-    const chargeId = donation?.source?.metadata?.stripeChargeId;
-    const directReferenceMatched = records.some((record) => (
-      record.source.providerOperationReference === adjustment.providerReference
-    ));
-    return !directReferenceMatched && (!chargeId || !providerRefundsByCharge.has(chargeId));
+  // This derives both settled cash still available and any explicitly recorded
+  // owner advance not yet offset by independently observed settlement.
+  const treasury = ledger.treasuryStatus({
+    settledContributionCents,
+    settledDonationIds: [...matchedDonations.keys()],
   });
-  if (unmatchedCompletedRefunds.length) {
-    throw new Error(
-      "Completed ledger refunds are not yet present in paid Stripe payout records: "
-      + unmatchedCompletedRefunds.map((item) => item.externalReference).join(", "),
-    );
-  }
-
-  // This call proves completed refunds and prior funding events do not exceed
-  // independently observed, settled contribution principal.
-  const treasury = ledger.treasuryStatus({ settledContributionCents });
   const provenance = {
     provider: "stripe",
     providerAccountId,

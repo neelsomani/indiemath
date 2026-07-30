@@ -169,77 +169,6 @@ export class OpenCollectiveIntakeController {
   }
 }
 
-export async function executeOpenCollectiveRefund({
-  ledger,
-  openCollective,
-  donationDedupId,
-  idempotencyReference,
-  requestedAmountCents,
-  cancelRecurringContribution = false,
-  message,
-}) {
-  assertPort(ledger, "ledger", [
-    "beginRefund",
-    "cancelRefund",
-    "completeRefund",
-    "getAdjustment",
-    "getDonation",
-  ]);
-  assertPort(openCollective, "Open Collective", ["refundTransaction"]);
-  try {
-    const existing = ledger.getAdjustment(idempotencyReference);
-    if (existing.status === "completed") {
-      return Object.freeze({ outcome: "duplicate", adjustment: existing });
-    }
-  } catch (error) {
-    if (error?.code !== "adjustment-not-found") throw error;
-  }
-  const donation = ledger.getDonation(donationDedupId);
-  const outstandingCents = donation.netCents - donation.refundedCents;
-  const requested = requestedAmountCents ?? outstandingCents;
-  if (!Number.isSafeInteger(requested) || requested < 1) {
-    throw new TypeError("requestedAmountCents must be positive integer cents.");
-  }
-  if (requested !== outstandingCents) {
-    throw new Error(
-      "Open Collective's refund API supports full transaction refunds only; "
-      + "use the Stripe refund provider for a partial amount.",
-    );
-  }
-
-  const pending = ledger.beginRefund({
-    donationDedupId,
-    requestedAmountCents: requested,
-    idempotencyReference,
-  });
-  if (pending.adjustment.status === "completed") {
-    return Object.freeze({
-      outcome: "duplicate",
-      adjustment: pending.adjustment,
-    });
-  }
-
-  try {
-    const provider = await openCollective.refundTransaction({
-      transactionId: donationDedupId,
-      cancelRecurringContribution,
-      message,
-    });
-    return ledger.completeRefund({
-      idempotencyReference,
-      providerReference: provider.providerReference,
-    });
-  } catch (error) {
-    if (isDefinitiveProviderFailure(error)) {
-      ledger.cancelRefund({
-        idempotencyReference,
-        note: `Open Collective definitively rejected the refund: ${error.message}`,
-      });
-    }
-    throw error;
-  }
-}
-
 function destinationForTransaction(ledger, transaction) {
   const tier = transaction.order.tier
     ? ledger.findOpenCollectiveTier({
@@ -293,12 +222,4 @@ function positiveInteger(value, label) {
     throw new TypeError(`${label} must be a positive safe integer.`);
   }
   return value;
-}
-
-function isDefinitiveProviderFailure(error) {
-  if (error?.definitive === true) return true;
-  const status = error?.status;
-  return Number.isInteger(status) && status >= 400 && status < 500 && status !== 408
-    && status !== 409
-    && status !== 429;
 }

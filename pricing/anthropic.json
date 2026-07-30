@@ -24,7 +24,7 @@
     "service_tier": "standard",
     "default_max_output_tokens": 64000,
     "headroom_input_allowance_tokens": 600000,
-    "compaction_trigger_tokens": 150000,
+    "compaction_trigger_tokens": 50000,
     "code_execution_tool": "code_execution_20260521",
     "web_fetch_tool": "web_fetch_20260318"
   },

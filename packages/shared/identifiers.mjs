@@ -7,6 +7,28 @@ export const WORKER_IDS = Object.freeze([
   "worker-3",
   "worker-4",
 ]);
+export const MIN_WORKER_COUNT = 1;
+export const MAX_WORKER_COUNT = WORKER_IDS.length;
+
+export function parseWorkerCount(value, label = "workerCount") {
+  const count = typeof value === "string" && /^\d+$/.test(value)
+    ? Number(value)
+    : value;
+  if (
+    !Number.isSafeInteger(count)
+    || count < MIN_WORKER_COUNT
+    || count > MAX_WORKER_COUNT
+  ) {
+    throw new TypeError(
+      `${label} must be an integer from ${MIN_WORKER_COUNT} to ${MAX_WORKER_COUNT}.`,
+    );
+  }
+  return count;
+}
+
+export function workerIdsForCount(value) {
+  return Object.freeze(WORKER_IDS.slice(0, parseWorkerCount(value)));
+}
 
 export function parseProblemId(value, label = "problemId") {
   if (

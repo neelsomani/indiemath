@@ -4,6 +4,7 @@ set -eu
 
 root_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 production_env="/etc/indiemath/indiemath.env"
+litestream_env="/etc/indiemath/litestream.env"
 
 if [ -e "$production_env" ]; then
   if [ "$(id -u)" -ne 0 ]; then
@@ -13,6 +14,11 @@ if [ -e "$production_env" ]; then
   set -a
   # shellcheck disable=SC1091
   . "$production_env"
+  if [ "${1:-}" = "backup" ] && [ "${2:-}" = "restore" ] && [ -e "$litestream_env" ]; then
+    # The replica credential is isolated from ordinary admin commands and is
+    # loaded only for an explicit restore into a non-live destination.
+    . "$litestream_env"
+  fi
   set +a
   service_user="${INDIEMATH_SERVICE_USER:-indiemath}"
   exec runuser -u "$service_user" --preserve-environment -- \

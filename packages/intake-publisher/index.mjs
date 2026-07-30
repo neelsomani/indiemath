@@ -6,7 +6,6 @@ import { PublicLedgerPublisherController } from "./publication.mjs";
 import { readTreasuryPublication } from "./treasury-publication.mjs";
 
 export {
-  executeOpenCollectiveRefund,
   OpenCollectiveIntakeController,
   runOpenCollectiveIntakeOnce,
 } from "./open-collective-intake.mjs";
@@ -17,6 +16,10 @@ export {
 export {
   reconcileStripeSettlements,
 } from "./settlement-reconciliation.mjs";
+export {
+  RampSpendSyncController,
+  syncRampSpendOnce,
+} from "./ramp-spend.mjs";
 export {
   buildPublicDocuments,
   publishPublicLedgerOnce,

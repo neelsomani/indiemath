@@ -20,6 +20,13 @@ const SOLUTION_KEYS = new Set([
   "assumption_label",
   "citations",
 ]);
+const NO_SOLUTION_KEYS = new Set([
+  "title",
+  "summary",
+  "research_markdown",
+  "verification_notes",
+  "citations",
+]);
 
 export const SUBMIT_SOLUTION_TOOL = Object.freeze({
   name: "submit_solution",
@@ -60,6 +67,40 @@ export const SUBMIT_SOLUTION_TOOL = Object.freeze({
   }),
 });
 
+export const SUBMIT_NO_SOLUTION_TOOL = Object.freeze({
+  name: "submit_no_solution",
+  description:
+    "Terminal action for ending this claim without a complete proof or disproof. "
+    + "Use only after substantial investigation when no valid solution is available. "
+    + "The problem remains open and unused claim funds return to its pool.",
+  input_schema: Object.freeze({
+    type: "object",
+    additionalProperties: false,
+    properties: Object.freeze({
+      title: Object.freeze({ type: "string" }),
+      summary: Object.freeze({ type: "string" }),
+      research_markdown: Object.freeze({
+        type: "string",
+        description: "Useful progress, failed approaches, and remaining obligations in Markdown.",
+      }),
+      verification_notes: Object.freeze({
+        type: "string",
+        description: "Checks performed and limitations of the research report.",
+      }),
+      citations: Object.freeze({
+        type: "array",
+        items: Object.freeze({ type: "string" }),
+      }),
+    }),
+    required: Object.freeze([
+      "title",
+      "summary",
+      "research_markdown",
+      "verification_notes",
+    ]),
+  }),
+});
+
 export function buildFableRequest({
   messages,
   systemPrompt,
@@ -69,6 +110,7 @@ export function buildFableRequest({
   effort = "max",
   compactionTriggerTokens = DEFAULT_COMPACTION_TRIGGER_TOKENS,
   pauseAfterCompaction = false,
+  enableCompaction = true,
   container,
   model = CLAUDE_FABLE_MODEL,
 } = {}) {
@@ -106,10 +148,14 @@ export function buildFableRequest({
   if (typeof pauseAfterCompaction !== "boolean") {
     throw new TypeError("pauseAfterCompaction must be a boolean.");
   }
+  if (typeof enableCompaction !== "boolean") {
+    throw new TypeError("enableCompaction must be a boolean.");
+  }
 
   return Object.freeze({
     model: requiredString(model, "model"),
     max_tokens: parsedMaxTokens,
+    cache_control: Object.freeze({ type: "ephemeral" }),
     system: Object.freeze([Object.freeze({
       type: "text",
       text: prompt,
@@ -133,19 +179,23 @@ export function buildFableRequest({
       },
       SUBMIT_SOLUTION_TOOL,
     ]),
-    context_management: Object.freeze({
-      edits: Object.freeze([Object.freeze({
-        type: COMPACTION_STRATEGY_TYPE,
-        trigger: Object.freeze({ type: "input_tokens", value: trigger }),
-        instructions:
-          "This is a nonterminal server compaction step. Write a nonempty "
-          + "carry-forward summary and do not call tools. Preserve the exact "
-          + "conjecture, definitions, established lemmas, "
-          + "failed approaches, computations, citations, rejection feedback, "
-          + "and every unresolved proof obligation.",
-        ...(pauseAfterCompaction ? { pause_after_compaction: true } : {}),
-      })]),
-    }),
+    ...(enableCompaction
+      ? {
+          context_management: Object.freeze({
+            edits: Object.freeze([Object.freeze({
+              type: COMPACTION_STRATEGY_TYPE,
+              trigger: Object.freeze({ type: "input_tokens", value: trigger }),
+              instructions:
+                "This is a nonterminal server compaction step. Write a nonempty "
+                + "carry-forward summary and do not call tools. Preserve the exact "
+                + "conjecture, definitions, established lemmas, "
+                + "failed approaches, computations, citations, rejection feedback, "
+                + "and every unresolved proof obligation.",
+              ...(pauseAfterCompaction ? { pause_after_compaction: true } : {}),
+            })]),
+          }),
+        }
+      : {}),
     ...(container ? { container: normalizeContainer(container) } : {}),
   });
 }
@@ -179,9 +229,16 @@ export function buildFableSystemPrompt({
     "Your work must be rigorous, self-contained, and checked against the canonical statement.",
     "Use code execution for calculations and searches for examples when they materially test an argument.",
     "A conditional result must name its assumption precisely; never present a conditional result as unconditional.",
-    "The submit_solution client tool is your only terminal signal. Call it if and only if you believe "
-      + "you have a complete proof or disproof, and include the full argument. An end_turn without "
-      + "submit_solution is treated as a request to continue researching. A server-requested "
+    "Call submit_solution if and only if you believe you have a complete proof or disproof, and include "
+      + "the full argument. Do not call it merely to stop or report progress. In every funded turn, advance "
+      + "the research with genuinely new analysis: pursue a new path, strengthen an incomplete argument, "
+      + "or falsify a remaining obstruction. Do not merely restate, recheck, or summarize prior work. End "
+      + "the API turn normally only after making that new progress and exhausting the presently productive "
+      + "avenue. An end_turn is only an API turn boundary, never the end of the funded claim: the harness "
+      + "immediately continues the same investigation until the claim's dollar budget reaches its safe "
+      + "spending boundary. The model task-token budget is advisory and is not the claim's financial budget; "
+      + "never announce that the funded claim is exhausted merely because the task-token countdown ended. "
+      + "A server-requested "
       + "compaction summary is a nonterminal context-management step, not an end_turn: write its "
       + "required nonempty summary without calling tools so the investigation can continue.",
     formatContextSection("Prior rejection notes", rejectionNotes),
@@ -196,7 +253,8 @@ export function buildInitialResearchMessage({
   return {
     role: "user",
     content: [
-      "Begin or resume the assigned investigation. Recheck inherited claims before relying on them.",
+      "Begin or resume the assigned investigation. Recheck inherited claims only when necessary, then "
+        + "produce genuinely new analysis that advances beyond the retained work.",
       formatOptionalContext("Prior compacted prove-direction context", proveContext),
       formatOptionalContext("Prior compacted disprove-direction context", disproveContext),
     ].join("\n\n"),
@@ -230,6 +288,34 @@ export function parseSubmittedSolution(value) {
     assumptionLabel: optionalString(
       value.assumption_label,
       "submit_solution.assumption_label",
+    ),
+    citations: Object.freeze(citations),
+  });
+}
+
+export function parseSubmittedNoSolution(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("submit_no_solution input must be an object.");
+  }
+  const unexpected = Object.keys(value).filter((key) => !NO_SOLUTION_KEYS.has(key));
+  if (unexpected.length) {
+    throw new TypeError(
+      `submit_no_solution contains unsupported fields: ${unexpected.join(", ")}.`,
+    );
+  }
+  const citations = value.citations === undefined
+    ? []
+    : parseStringArray(value.citations, "submit_no_solution.citations");
+  return Object.freeze({
+    title: requiredString(value.title, "submit_no_solution.title"),
+    summary: requiredString(value.summary, "submit_no_solution.summary"),
+    researchMarkdown: requiredString(
+      value.research_markdown,
+      "submit_no_solution.research_markdown",
+    ),
+    verificationNotes: requiredString(
+      value.verification_notes,
+      "submit_no_solution.verification_notes",
     ),
     citations: Object.freeze(citations),
   });

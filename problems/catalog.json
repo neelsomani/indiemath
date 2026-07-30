@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "catalog_revision": 4,
+  "catalog_revision": 5,
   "direction_contract": {
     "statement": "The canonical, normally stated conjecture or positive resolution target.",
     "prove": "The worker is asked to establish the canonical statement.",
@@ -681,22 +681,6 @@
         "kind": "repository",
         "reference": "fable-math/50-open-problems.md",
         "entry": 42
-      }
-    },
-    {
-      "id": "math-043",
-      "slug": "the-jacobian-conjecture",
-      "domain": "mathematics",
-      "title": "The Jacobian Conjecture",
-      "statement": "Every polynomial map F: ℂⁿ → ℂⁿ whose Jacobian determinant is a nonzero constant is invertible (with polynomial inverse).",
-      "directions": {
-        "prove": "Prove the canonical statement.",
-        "disprove": "Exhibit a non-invertible polynomial map with constant nonzero Jacobian — a finite certificate (the map's coefficients, plus a witness of non-injectivity: two points with equal image, checkable exactly)."
-      },
-      "source": {
-        "kind": "repository",
-        "reference": "fable-math/50-open-problems.md",
-        "entry": 43
       }
     },
     {

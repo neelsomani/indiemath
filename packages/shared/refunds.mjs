@@ -81,10 +81,23 @@ export function calculateRefundableCents({
     "destinationBalanceCents",
   );
   const remainingDonation = status.effectiveNetCents - pending;
-  const requested = requestedCents === undefined
-    ? remainingDonation
-    : asCents(requestedCents, "requestedCents");
-  return Math.min(requested, remainingDonation, destinationBalance);
+  if (destinationBalance < remainingDonation) {
+    throw new RangeError(
+      `Full refund of donation ${donationDedupId} requires `
+        + `${remainingDonation} cents, but its destination has only `
+        + `${destinationBalance} cents available.`,
+    );
+  }
+  if (requestedCents === undefined) return remainingDonation;
+  const requested = asCents(requestedCents, "requestedCents");
+  if (requested !== remainingDonation) {
+    throw new RangeError(
+      `Only full refunds are supported for donation ${donationDedupId}; `
+        + `requested ${requested} cents, full refundable net amount `
+        + `${remainingDonation} cents.`,
+    );
+  }
+  return requested;
 }
 
 export function deriveDonationRefundState({

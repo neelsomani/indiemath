@@ -14,6 +14,15 @@ const config = parseWorkerConfig(process.env);
 if (config.runtime !== "production") {
   throw new TypeError("The supervised worker entrypoint requires production runtime.");
 }
+if (config.runsPausedReason) {
+  console.log(JSON.stringify({
+    event: "worker-paused",
+    workerId: config.workerId,
+    reason: config.runsPausedReason,
+  }));
+  await waitForTermination();
+  process.exit(0);
+}
 const ledger = await openLedger({ databasePath: config.databasePath });
 const worker = createProductionWorkerRuntime({ config, ledger });
 
@@ -66,4 +75,20 @@ function summarizeState(state) {
       ?? result.spendableCapacityCents,
     claimFailureCodes: result.claimFailures?.map((failure) => failure.code),
   };
+}
+
+function waitForTermination() {
+  return new Promise((resolve) => {
+    const keepAlive = setInterval(() => {}, 60_000);
+    const finish = () => {
+      clearInterval(keepAlive);
+      for (const signal of ["SIGINT", "SIGTERM"]) {
+        process.removeListener(signal, finish);
+      }
+      resolve();
+    };
+    for (const signal of ["SIGINT", "SIGTERM"]) {
+      process.once(signal, finish);
+    }
+  });
 }

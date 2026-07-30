@@ -6,9 +6,12 @@ import {
 } from "./artifact-keys.mjs";
 import {
   parsePositiveInteger,
+  parseWorkerCount,
   parseWorkerId,
   WORKER_IDS,
+  workerIdsForCount,
 } from "./identifiers.mjs";
+import { parseRunPauseReason } from "./run-control.mjs";
 
 export const RUNTIMES = Object.freeze(["fake", "production"]);
 const repositoryRoot = path.resolve(
@@ -61,6 +64,10 @@ export function parseWorkerConfig(environment) {
       environment.INDIEMATH_PRICING_TABLE?.trim() || defaultPricingTablePath,
       "INDIEMATH_PRICING_TABLE",
     ),
+    runsPausedReason: parseRunPauseReason(
+      environment.INDIEMATH_RUNS_PAUSED_REASON,
+      "INDIEMATH_RUNS_PAUSED_REASON",
+    ),
     r2: parseR2Config(environment, runtime),
     anthropic: Object.freeze(anthropic),
   });
@@ -80,8 +87,13 @@ export function parseIntakePublisherConfig(environment) {
       "PUBLISH_INTERVAL_SECONDS",
       30,
     ),
+    runsPausedReason: parseRunPauseReason(
+      environment.INDIEMATH_RUNS_PAUSED_REASON,
+      "INDIEMATH_RUNS_PAUSED_REASON",
+    ),
     r2: parseR2Config(environment, runtime),
     openCollective: parseOpenCollectiveConfig(environment, runtime),
+    ramp: parseOptionalRampConfig(environment, runtime),
   });
 }
 
@@ -126,8 +138,12 @@ export function parseFrontendConfig(environment) {
   });
 }
 
-export function validateWorkerFleet(configs, { requireComplete = true } = {}) {
+export function validateWorkerFleet(configs, {
+  requireComplete = true,
+  workerCount = WORKER_IDS.length,
+} = {}) {
   if (!Array.isArray(configs)) throw new TypeError("Worker fleet must be an array.");
+  const expectedWorkerIds = workerIdsForCount(parseWorkerCount(workerCount));
   const workerIds = new Set();
   const apiKeys = new Set();
 
@@ -147,11 +163,19 @@ export function validateWorkerFleet(configs, { requireComplete = true } = {}) {
   }
 
   if (requireComplete) {
-    const missing = WORKER_IDS.filter((workerId) => !workerIds.has(workerId));
-    if (missing.length || configs.length !== WORKER_IDS.length) {
+    const missing = expectedWorkerIds.filter((workerId) => !workerIds.has(workerId));
+    const unexpected = [...workerIds].filter(
+      (workerId) => !expectedWorkerIds.includes(workerId),
+    );
+    if (
+      missing.length
+      || unexpected.length
+      || configs.length !== expectedWorkerIds.length
+    ) {
       throw new Error(
-        `Worker fleet must contain exactly ${WORKER_IDS.join(", ")}; `
-        + `missing: ${missing.join(", ") || "none"}.`,
+        `Worker fleet must contain exactly ${expectedWorkerIds.join(", ")}; `
+        + `missing: ${missing.join(", ") || "none"}; `
+        + `unexpected: ${unexpected.join(", ") || "none"}.`,
       );
     }
   }
@@ -204,6 +228,43 @@ function parseOpenCollectiveConfig(environment, runtime) {
     ),
     collectiveSlug,
     apiToken: required(environment, "OPEN_COLLECTIVE_API_TOKEN"),
+  });
+}
+
+function parseOptionalRampConfig(environment, runtime) {
+  const credentialKeys = [
+    "RAMP_CLIENT_ID",
+    "RAMP_CLIENT_SECRET",
+    "RAMP_CARD_ID",
+  ];
+  const present = credentialKeys.filter((key) => (
+    typeof environment?.[key] === "string" && environment[key].trim()
+  ));
+  if (runtime === "fake") {
+    rejectPresent(environment, credentialKeys);
+    return undefined;
+  }
+  if (present.length === 0) return undefined;
+  if (present.length !== credentialKeys.length) {
+    throw new TypeError(
+      "Incomplete Ramp configuration; missing "
+      + credentialKeys.filter((key) => !present.includes(key)).join(", ")
+      + ".",
+    );
+  }
+  return Object.freeze({
+    clientId: required(environment, "RAMP_CLIENT_ID"),
+    clientSecret: required(environment, "RAMP_CLIENT_SECRET"),
+    cardId: required(environment, "RAMP_CARD_ID"),
+    baseUrl: parseHttpUrl(
+      environment.RAMP_API_BASE_URL?.trim() || "https://api.ramp.com",
+      "RAMP_API_BASE_URL",
+    ),
+    syncIntervalSeconds: optionalPositiveInteger(
+      environment,
+      "RAMP_SYNC_INTERVAL_SECONDS",
+      300,
+    ),
   });
 }
 

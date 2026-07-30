@@ -5,6 +5,7 @@ import {
   parseWorkerId,
 } from "./identifiers.mjs";
 import { addCents, asCents } from "./money.mjs";
+import { parseRunControl } from "./run-control.mjs";
 import { deriveTreasuryPublication } from "./treasury.mjs";
 
 /** @typedef {'prove'|'disprove'} Direction */
@@ -64,6 +65,7 @@ import { deriveTreasuryPublication } from "./treasury.mjs";
  * @typedef {object} FundingEvent
  * @property {string} externalReference
  * @property {number} amountCents
+ * @property {'settled'|'owner_prefunded'} fundingSource
  * @property {string} fundedAt
  */
 /**
@@ -82,8 +84,11 @@ import { deriveTreasuryPublication } from "./treasury.mjs";
  * @property {number} settledContributionCents
  * @property {number} completedRefundCents
  * @property {number} pendingRefundCents
+ * @property {number} settledCompletedRefundCents
+ * @property {number} settledPendingRefundCents
  * @property {number} fundingEventCents
  * @property {number} settledButUnfundedCents
+ * @property {number} outstandingOwnerAdvanceCents
  * @property {number} availableToFundCents
  * @property {number} spendableCapacityCents
  * @property {number} liveReservationsCents
@@ -344,6 +349,11 @@ export function parseFundingEvent(value, label = "fundingEvent") {
       `${label}.externalReference`,
     ),
     amountCents,
+    fundingSource: parseEnum(
+      input.fundingSource ?? "settled",
+      ["settled", "owner_prefunded"],
+      `${label}.fundingSource`,
+    ),
     fundedAt: parseTimestamp(input.fundedAt, `${label}.fundedAt`),
   });
 }
@@ -493,6 +503,9 @@ export function parsePublisherSnapshot(value, label = "publisherSnapshot") {
       : parseObjectKey(input.ledgerKey, `${label}.ledgerKey`),
     ledgerSha256,
     unprocessedCents,
+    runControl: input.runControl === undefined
+      ? parseRunControl({ paused: false }, `${label}.runControl`)
+      : parseRunControl(input.runControl, `${label}.runControl`),
     treasury: parseTreasurySnapshot(input.treasury, `${label}.treasury`),
     generalCredit,
     problems: Object.freeze(problems),
@@ -655,6 +668,9 @@ export function parsePublicLedger(value, label = "publicLedger") {
     parsePublishedSettlementSnapshot,
     `${label}.settlementSnapshots`,
   );
+  const rampSpend = input.rampSpend === undefined
+    ? undefined
+    : parsePublishedRampSpend(input.rampSpend, `${label}.rampSpend`);
   return Object.freeze({
     ...structuredClone(input),
     schemaVersion: 1,
@@ -685,6 +701,7 @@ export function parsePublicLedger(value, label = "publicLedger") {
     adjustments: Object.freeze(adjustments),
     fundingEvents: Object.freeze(fundingEvents),
     settlementSnapshots: Object.freeze(settlementSnapshots),
+    rampSpend,
   });
 }
 
@@ -747,6 +764,10 @@ function parsePublishedAccounting(value, label) {
       input.settledSpendCents,
       `${label}.settledSpendCents`,
     ),
+    approximateRunSpendCents: asCents(
+      input.approximateRunSpendCents ?? input.settledSpendCents,
+      `${label}.approximateRunSpendCents`,
+    ),
     liveReservationCents: asCents(
       input.liveReservationCents,
       `${label}.liveReservationCents`,
@@ -771,6 +792,25 @@ function parsePublishedAccounting(value, label) {
     throw new RangeError(`${label} totals disagree.`);
   }
   return Object.freeze(result);
+}
+
+function parsePublishedRampSpend(value, label) {
+  const input = expectObject(value, label);
+  return Object.freeze({
+    actualSpendCents: asCents(
+      input.actualSpendCents,
+      `${label}.actualSpendCents`,
+    ),
+    sourceTransactionCount: parseNonnegativeInteger(
+      input.sourceTransactionCount,
+      `${label}.sourceTransactionCount`,
+    ),
+    cutoffAt: parseTimestamp(input.cutoffAt, `${label}.cutoffAt`),
+    lastObservedAt: parseTimestamp(
+      input.lastObservedAt,
+      `${label}.lastObservedAt`,
+    ),
+  });
 }
 
 function parsePublishedAdjustment(value, label) {
@@ -818,6 +858,11 @@ function parsePublishedFundingEvent(value, label) {
     settledContributionCents: asCents(
       input.settledContributionCents,
       `${label}.settledContributionCents`,
+    ),
+    fundingSource: parseEnum(
+      input.fundingSource ?? "settled",
+      ["settled", "owner_prefunded"],
+      `${label}.fundingSource`,
     ),
     fundedAt: parseTimestamp(input.fundedAt, `${label}.fundedAt`),
   });

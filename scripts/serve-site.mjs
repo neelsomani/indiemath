@@ -29,7 +29,6 @@ const publicRoots = new Set([
   "ledger.html",
   "og.png",
   "robots.txt",
-  "seed",
   "sitemap.xml",
   "terms.html",
 ]);
@@ -43,16 +42,6 @@ const server = createServer(async (request, response) => {
     if (
       !publicRoots.has(segments[0])
       || segments.some((segment) => !segment || segment === "." || segment === "..")
-      || (
-        segments[0] === "seed"
-        && (
-          segments[1] !== "fable-math"
-          || !(
-            segments[2] === "manifest.json"
-            || segments[2] === "contexts"
-          )
-        )
-      )
     ) {
       return sendNotFound(response);
     }

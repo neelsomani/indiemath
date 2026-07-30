@@ -174,7 +174,7 @@ test("sync permits slug swaps and preserves problem status", async (context) => 
   }
 });
 
-test("sync refuses revision rollback, ID reuse, and removal", async (context) => {
+test("sync refuses revision rollback and ID reuse while tombstoning omissions", async (context) => {
   const scratch = await mkdtemp(path.join(os.tmpdir(), "indiemath-catalog-test-"));
   context.after(() => rm(scratch, { recursive: true, force: true }));
   const databasePath = path.join(scratch, "ledger.sqlite");
@@ -198,11 +198,32 @@ test("sync refuses revision rollback, ID reuse, and removal", async (context) =>
 
   const removed = structuredClone(catalog);
   removed.catalog_revision += 1;
-  removed.problems.pop();
-  await assert.rejects(
-    syncCatalog({ catalog: removed, databasePath }),
-    /omits previously issued problem_id/,
+  const omittedProblem = removed.problems.pop();
+  const removal = await syncCatalog({ catalog: removed, databasePath });
+  assert.deepEqual(removal, {
+    outcome: "synced",
+    catalog_revision: removed.catalog_revision,
+    problem_count: removed.problems.length,
+    added: 0,
+    updated: 0,
+  });
+  assert.equal(readCatalogStatus(databasePath).problem_count, removed.problems.length);
+  assert.equal(
+    readSyncedCatalog(databasePath).problems.some(
+      (problem) => problem.id === omittedProblem.id,
+    ),
+    false,
   );
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const tombstone = database.prepare(
+      "SELECT identity_hash, catalog_present FROM problems WHERE problem_id = ?",
+    ).get(omittedProblem.id);
+    assert.equal(tombstone.catalog_present, 0);
+    assert.equal(typeof tombstone.identity_hash, "string");
+  } finally {
+    database.close();
+  }
 });
 
 test("catalog readers report a friendly error for a missing ledger", async (context) => {

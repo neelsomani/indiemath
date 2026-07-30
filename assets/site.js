@@ -1,5 +1,4 @@
 import {
-  assertFableArchive,
   assertPublicDocumentPair,
   destinationLabel,
   directionLabel,
@@ -12,8 +11,14 @@ import {
   formatMoney,
   generatedOutputTokensByProblem,
   initialResearchDirection,
+  loadWithRetry,
+  netContributionCents,
+  netPoolContributionCents,
+  netProblemContributionCents,
   normalizeSearch,
   pollKeepingLastGood,
+  priorResearchForCurrentCatalog,
+  processedPoolBalanceCents,
   processingPresentation,
   publicObjectUrl,
   researchRunCount,
@@ -21,7 +26,8 @@ import {
   searchableReview,
   searchableRun,
   statusPresentation,
-} from "./site-data.js?v=fd36ced5";
+  visibleContributions,
+} from "./site-data.js?v=1dd95c37";
 
 const PAGE_SIZE = 10;
 const OUTPUT_POLL_INTERVAL_MS = 5_000;
@@ -34,22 +40,71 @@ const publicDataBaseUrl = document
 
 let publicState;
 let publicLedger;
-let fableArchive;
+let priorResearchArchive;
 
+initMobileNavigation();
+initProblemFilterDisclosure();
 initTermsDialog();
 void loadAndRender();
+
+function initMobileNavigation() {
+  const button = document.querySelector(".nav-menu-button");
+  const navigation = document.querySelector("#primary-navigation");
+  if (!button || !navigation) return;
+  const close = () => {
+    navigation.dataset.mobileOpen = "false";
+    button.setAttribute("aria-expanded", "false");
+    button.setAttribute("aria-label", "Open navigation");
+  };
+  const open = () => {
+    navigation.dataset.mobileOpen = "true";
+    button.setAttribute("aria-expanded", "true");
+    button.setAttribute("aria-label", "Close navigation");
+  };
+  button.addEventListener("click", () => {
+    if (button.getAttribute("aria-expanded") === "true") close();
+    else open();
+  });
+  navigation.addEventListener("click", (event) => {
+    if (event.target.closest("a")) close();
+  });
+  document.addEventListener("click", (event) => {
+    if (
+      button.getAttribute("aria-expanded") === "true"
+      && !event.target.closest(".site-header")
+    ) {
+      close();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      close();
+      button.focus();
+    }
+  });
+  const desktop = matchMedia("(min-width: 1001px)");
+  desktop.addEventListener("change", (event) => {
+    if (event.matches) close();
+  });
+}
+
+function initProblemFilterDisclosure() {
+  const disclosure = document.querySelector("#problem-filter-disclosure");
+  if (!disclosure) return;
+  if (matchMedia("(max-width: 680px)").matches) disclosure.open = false;
+}
 
 async function loadAndRender() {
   try {
     ({
       state: publicState,
       ledger: publicLedger,
-      archive: fableArchive,
-    } = await loadPublicDocuments());
+      archive: priorResearchArchive,
+    } = await loadWithRetry(loadPublicDocuments));
     if (page === "ledger") {
-      renderLedgerPage(publicState, publicLedger, fableArchive);
+      renderLedgerPage(publicState, publicLedger, priorResearchArchive);
     } else {
-      renderProblemsPage(publicState, publicLedger, fableArchive);
+      renderProblemsPage(publicState, publicLedger, priorResearchArchive);
     }
   } catch (error) {
     console.error("IndieMath public-data load failed.", error);
@@ -61,13 +116,21 @@ async function loadPublicDocuments() {
   if (!publicDataBaseUrl) throw new Error("Public data URL is not configured.");
   const [{ state, ledger }, archiveResponse] = await Promise.all([
     loadPublicStatePair(),
-    fetch("seed/fable-math/manifest.json", { cache: "no-store" }),
+    fetch(
+      publicObjectUrl(
+        publicDataBaseUrl,
+        "public/prior-research/manifest.json",
+      ),
+      { cache: "no-store" },
+    ),
   ]);
   if (!archiveResponse.ok) {
     throw new Error(`Research manifest request failed with HTTP ${archiveResponse.status}.`);
   }
-  const archive = await archiveResponse.json();
-  assertFableArchive(archive, state.problems);
+  const archive = priorResearchForCurrentCatalog(
+    await archiveResponse.json(),
+    state.problems,
+  );
   return { state, ledger, archive };
 }
 
@@ -107,14 +170,18 @@ function renderProblemsPage(state, ledger, archive) {
 
 function renderHomepageMetrics(state, ledger, archive) {
   const openProblems = state.problems.filter((problem) => problem.status !== "Solved").length;
+  const netContributions = netContributionCents(
+    ledger.accounting,
+    ledger.treasury,
+  );
   const metrics = [
     {
       label: "Received",
-      value: formatMoney(state.unprocessedCents),
+      value: formatMoney(netContributions),
       emphasis: true,
     },
     {
-      label: "Compute capacity",
+      label: "Available run funds",
       value: formatMoney(state.treasury.spendableCapacityCents),
     },
     {
@@ -136,6 +203,11 @@ function renderHomepageMetrics(state, ledger, archive) {
 
 function renderTreasuryNotice(state) {
   const notice = document.querySelector("#treasury-notice");
+  if (state.runControl?.reason === "anthropic-monthly-plan-limit") {
+    notice.hidden = false;
+    notice.textContent = "Runs paused - Anthropic monthly plan limit reached.";
+    return;
+  }
   const treasury = state.treasury;
   if (!treasury.runsPausedPendingSettlement) {
     notice.hidden = true;
@@ -143,7 +215,7 @@ function renderTreasuryNotice(state) {
   }
   notice.hidden = false;
   if (state.unprocessedCents > 0) {
-    notice.textContent = `${formatMoney(state.unprocessedCents)} received · refundable until staged. Runs remain paused.`;
+    notice.textContent = "No processed funds available - runs paused.";
     return;
   }
   if (treasury.settledButUnfundedCents > 0) {
@@ -173,7 +245,7 @@ function initProblemExplorer(state, ledger, archive) {
     runs: ledger.runs,
     archivedResponses: archive.responses,
   });
-  const fableResponses = new Map(
+  const priorResearchResponses = new Map(
     archive.responses.map((response) => [response.problemId, response]),
   );
 
@@ -194,7 +266,11 @@ function initProblemExplorer(state, ledger, archive) {
     const list = document.querySelector("#problem-list");
     closeOutputPanesWithin(list);
     list.replaceChildren(...visible.map((problem) => (
-      problemRow(problem, ledger, fableResponses.get(problem.problemId))
+      problemRow(
+        problem,
+        ledger,
+        priorResearchResponses.get(problem.problemId),
+      )
     )));
     list.ariaBusy = "false";
     document.querySelector("#problem-count").textContent = `${filtered.length} ${filtered.length === 1 ? "problem" : "problems"} shown`;
@@ -258,8 +334,18 @@ function closeOutputPanesWithin(container) {
   }
 }
 
-function problemRow(problem, ledger, fableResponse) {
+function problemRow(problem, ledger, priorResearchResponse) {
   const status = statusPresentation(problem.status);
+  const receivedCents = netProblemContributionCents(
+    ledger.donations,
+    problem.problemId,
+  );
+  const runningPills = (problem.liveClaims ?? []).map((claim) => (
+    element("span", {
+      className: "status-pill status-running",
+      text: `${directionLabel(claim.direction)} running`,
+    })
+  ));
   const row = element("article", {
     className: "problem-row-shell",
     attrs: {
@@ -279,13 +365,14 @@ function problemRow(problem, ledger, fableResponse) {
     element("span", { className: "problem-row-main" }, [
       element("span", { className: "problem-row-meta" }, [
         element("span", { className: `status-pill ${status.className}`, text: status.label }),
+        ...runningPills,
         element("span", { className: "domain-pill", text: formatDomain(problem.domain) }),
         element("span", { className: "problem-id", text: problem.problemId }),
       ]),
       element("strong", { className: "problem-row-title", text: problem.title }),
     ]),
     element("span", { className: "problem-row-funding" }, [
-      element("strong", { text: formatMoney(problem.unprocessedCents) }),
+      element("strong", { text: formatMoney(receivedCents) }),
       element("small", { text: "received" }),
     ]),
     element("span", {
@@ -301,10 +388,17 @@ function problemRow(problem, ledger, fableResponse) {
       hidden: "",
     },
   }, [
-    problemDetails(problem, ledger, fableResponse),
+    problemDetails(problem, ledger, priorResearchResponse),
   ]);
   button.addEventListener("click", () => {
     const opening = expanded.hidden;
+    if (opening) {
+      for (const other of row.parentElement.querySelectorAll(
+        ".problem-row-shell-expanded",
+      )) {
+        if (other !== row) other.querySelector(":scope > .problem-row")?.click();
+      }
+    }
     expanded.hidden = !opening;
     button.setAttribute("aria-expanded", String(opening));
     button.setAttribute(
@@ -327,7 +421,7 @@ function problemRow(problem, ledger, fableResponse) {
   return row;
 }
 
-function problemDetails(problem, ledger, fableResponse) {
+function problemDetails(problem, ledger, priorResearchResponse) {
   const details = element("div", { className: "problem-detail" });
   details.append(
     element("p", { className: "problem-statement" }, [
@@ -335,7 +429,7 @@ function problemDetails(problem, ledger, fableResponse) {
     ]),
   );
   details.append(
-    directionPrompt(problem, fableResponse),
+    directionPrompt(problem, ledger, priorResearchResponse),
     contributionActions(problem, ledger),
   );
 
@@ -346,7 +440,7 @@ function problemDetails(problem, ledger, fableResponse) {
   return details;
 }
 
-function directionPrompt(problem, fableResponse) {
+function directionPrompt(problem, ledger, priorResearchResponse) {
   const prompt = element("div", {
     className: "direction-textbox",
     attrs: {
@@ -365,9 +459,10 @@ function directionPrompt(problem, fableResponse) {
   ]);
   const importedSources = researchOutputSources(
     { ...problem, liveClaims: [] },
-    fableResponse,
+    { ...ledger, runs: [] },
+    priorResearchResponse,
   );
-  let outputSources = researchOutputSources(problem, fableResponse);
+  let outputSources = researchOutputSources(problem, ledger, priorResearchResponse);
   const initialDirection = initialResearchDirection(outputSources);
   const outputCache = new Map();
   const outputContainers = new Map();
@@ -503,13 +598,13 @@ function directionPrompt(problem, fableResponse) {
     const result = await pollKeepingLastGood(
       lastGoodStatePair,
       () => withAbortSignal((signal) => loadPublicStatePair({ signal })),
-      ({ state }) => {
+      ({ state, ledger: freshLedger }) => {
         if (!paneOpen || pollingSession !== session) return;
         const freshProblem = state.problems.find((candidate) => (
           candidate.problemId === problem.problemId
         ));
         if (!freshProblem) return;
-        const freshLiveSources = researchOutputSources(freshProblem);
+        const freshLiveSources = researchOutputSources(freshProblem, freshLedger);
         const freshDirections = new Set(
           freshLiveSources.map((source) => source.direction),
         );
@@ -571,42 +666,46 @@ function directionPrompt(problem, fableResponse) {
   return control;
 }
 
-function researchOutputSources(problem, fableResponse) {
+function researchOutputSources(problem, ledger, priorResearchResponse) {
   const sources = [];
-  for (const claim of problem.liveClaims ?? []) {
-    const latest = claim.transcriptSegments?.at(-1);
-    const currentKey = currentResponseKey(claim);
-    if (currentKey) {
+  for (const direction of ["prove", "disprove"]) {
+    const runs = (ledger?.runs ?? []).filter((run) => (
+      run.problemId === problem.problemId && run.direction === direction
+    ));
+    const live = (problem.liveClaims ?? []).filter((claim) => (
+      claim.direction === direction
+    ));
+    if (runs.length || live.length) {
+      const latestRun = [...runs, ...live].sort((left, right) => (
+        right.claimTs - left.claimTs
+      ))[0];
+      const latest = latestRun?.transcriptSegments?.at(-1);
       sources.push({
-        id: `live:${problem.problemId}:${claim.direction}:${claim.claimTs}`,
-        direction: claim.direction,
-        url: publicObjectUrl(publicDataBaseUrl, currentKey),
+        id: `session:${problem.problemId}:${direction}`,
+        direction,
+        url: publicObjectUrl(
+          publicDataBaseUrl,
+          `transcripts/${problem.problemId}/${direction}/session.md`,
+        ),
         fallbackUrl: latest?.humanTranscriptKey
           ? publicObjectUrl(publicDataBaseUrl, latest.humanTranscriptKey)
           : undefined,
       });
     }
   }
-  if (fableResponse) {
+  if (priorResearchResponse) {
     sources.push({
-      id: `imported:${problem.problemId}:${fableResponse.direction}`,
-      direction: fableResponse.direction,
-      url: `seed/fable-math/${fableResponse.contextArtifact}`,
+      id:
+        `imported:${problem.problemId}:${priorResearchResponse.direction}`,
+      direction: priorResearchResponse.direction,
+      url: publicObjectUrl(
+        publicDataBaseUrl,
+        priorResearchResponse.contextKey,
+      ),
       imported: true,
     });
   }
   return sources;
-}
-
-function currentResponseKey(claim) {
-  if (!claim.transcriptPrefix) return undefined;
-  const latestSequence = (claim.transcriptSegments ?? []).reduce(
-    (maximum, segment) => Number.isSafeInteger(segment.sequence)
-      ? Math.max(maximum, segment.sequence)
-      : maximum,
-    0,
-  );
-  return `${claim.transcriptPrefix}response-${latestSequence + 1}.md`;
 }
 
 function outputSourceSignature(sources) {
@@ -740,9 +839,10 @@ function contributionActions(problem, ledger) {
       candidate.direction === direction
     ));
     if (!pool) continue;
-    const contributedCents = (
-      pool.cumulativeDonationsCents + pool.unprocessedCents
-    );
+    const contributedCents = netPoolContributionCents(ledger.donations, {
+      problemId: problem.problemId,
+      direction,
+    });
     const spentCents = ledger.runs
       .filter((run) => (
         run.problemId === problem.problemId
@@ -833,11 +933,12 @@ function reviewPanel(problem, ledger) {
 }
 
 function recentContributionsPanel(problem) {
-  if (!problem.recentDonations?.length) return undefined;
+  const donations = visibleContributions(problem.recentDonations).slice(0, 8);
+  if (donations.length === 0) return undefined;
   const panel = element("section", { className: "contributions-panel" });
   panel.append(element("h4", { text: "Recent contributions" }));
   const list = element("ul", { className: "contribution-mini-list" });
-  for (const donation of problem.recentDonations.slice(0, 8)) {
+  for (const donation of donations) {
     const status = processingPresentation(donation.processingStatus);
     const destination = displayDestination(donation);
     list.append(element("li", {}, [
@@ -872,14 +973,24 @@ function renderLedgerPage(state, ledger, archive) {
 }
 
 function renderLedgerMetrics(state, ledger) {
-  const netContributions = ledger.accounting.donationNetCents;
-  const settledSpend = ledger.accounting.settledSpendCents;
-  const poolBalances = ledger.accounting.poolBalanceCents;
+  const netContributions = netContributionCents(
+    ledger.accounting,
+    ledger.treasury,
+  );
+  const approximateRunSpend = ledger.accounting.approximateRunSpendCents;
+  const poolBalances = processedPoolBalanceCents(state.problems);
   const metrics = [
     { label: "Net contributions", value: formatMoney(netContributions), note: "After Open Collective/Stripe processing fees", emphasis: true },
     { label: "Received · unprocessed", value: formatMoney(state.unprocessedCents), note: "Takes 1–2 business days" },
-    { label: "Settled run spend", value: formatMoney(settledSpend), note: "Priced model usage" },
-    { label: "Current pool balances", value: formatMoney(poolBalances), note: "Across every problem and direction" },
+    { label: "Current pool balances", value: formatMoney(poolBalances), note: "Processed and unspent" },
+    { label: "Approximate run spend", value: formatMoney(approximateRunSpend), note: "Priced model usage" },
+    {
+      label: "Actual Ramp spend",
+      value: ledger.rampSpend
+        ? formatMoney(ledger.rampSpend.actualSpendCents)
+        : "—",
+      note: "Reconciled periodically against approximate run spend",
+    },
   ];
   const container = document.querySelector("#ledger-metrics");
   container.replaceChildren(...metrics.map(metricCard));
@@ -895,7 +1006,7 @@ function initLedgerExplorer(state, ledger, archive) {
   let activeTab = "contributions";
 
   const records = {
-    contributions: [...ledger.donations].sort((left, right) => (
+    contributions: visibleContributions(ledger.donations).sort((left, right) => (
       right.creditedAt.localeCompare(left.creditedAt)
     )),
     runs: [
@@ -965,7 +1076,7 @@ function renderContributionRows(contributions, problemTitles, filtering) {
   const body = document.querySelector("#contribution-rows");
   if (contributions.length === 0) {
     body.replaceChildren(emptyTableRow(
-      6,
+      7,
       filtering ? "No contributions match that search." : "No contributions have been published yet.",
     ));
     return;
@@ -976,6 +1087,7 @@ function renderContributionRows(contributions, problemTitles, filtering) {
       element("td", { text: donation.donorTag }),
       element("td", { text: destinationLabel(donation, problemTitles) }),
       element("td", { text: formatMoney(donation.grossCents) }),
+      element("td", { text: formatMoney(donation.netCents) }),
       element("td", {}, [
         element("span", {
           className: `badge ${status.className}`,

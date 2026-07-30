@@ -1,4 +1,4 @@
-export const LEDGER_SCHEMA_VERSION = 6;
+export const LEDGER_SCHEMA_VERSION = 9;
 
 export function configureLedgerConnection(database) {
   database.exec(`
@@ -57,6 +57,8 @@ export function initializeLedgerSchema(database) {
       disprove_prompt TEXT NOT NULL,
       source_json TEXT NOT NULL,
       metadata_json TEXT NOT NULL,
+      catalog_present INTEGER NOT NULL DEFAULT 1
+        CHECK (catalog_present IN (0, 1)),
       status TEXT NOT NULL DEFAULT 'Open'
         CHECK (status IN ('Open', 'PendingReview', 'Solved')),
       pending_direction TEXT CHECK (pending_direction IN ('prove', 'disprove')),
@@ -76,6 +78,12 @@ export function initializeLedgerSchema(database) {
   );
   ensureColumn(database, "problems", "pending_claim_ts", "INTEGER");
   ensureColumn(database, "problems", "pending_solution_uri", "TEXT");
+  ensureColumn(
+    database,
+    "problems",
+    "catalog_present",
+    "INTEGER NOT NULL DEFAULT 1 CHECK (catalog_present IN (0, 1))",
+  );
   ensureColumn(
     database,
     "problems",
@@ -294,6 +302,8 @@ export function initializeLedgerSchema(database) {
       amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
       settled_contribution_cents INTEGER NOT NULL
         CHECK (settled_contribution_cents >= 0),
+      funding_source TEXT NOT NULL DEFAULT 'settled'
+        CHECK (funding_source IN ('settled', 'owner_prefunded')),
       funded_at TEXT NOT NULL
     );
 
@@ -334,6 +344,39 @@ export function initializeLedgerSchema(database) {
 
     CREATE INDEX IF NOT EXISTS adjustments_donation
       ON adjustments(donation_dedup_id, reason_code, status);
+
+    CREATE TABLE IF NOT EXISTS anthropic_spend_reconciliations (
+      external_reference TEXT PRIMARY KEY,
+      cutoff_at TEXT NOT NULL UNIQUE,
+      actual_spend_cents INTEGER NOT NULL CHECK (actual_spend_cents >= 0),
+      ledger_applied_spend_cents INTEGER NOT NULL
+        CHECK (ledger_applied_spend_cents >= 0),
+      target_correction_cents INTEGER NOT NULL,
+      applied_correction_cents INTEGER NOT NULL,
+      adjustment_external_reference TEXT UNIQUE
+        REFERENCES adjustments(external_reference),
+      note TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      CHECK (
+        (applied_correction_cents = 0 AND adjustment_external_reference IS NULL)
+        OR
+        (applied_correction_cents <> 0 AND adjustment_external_reference IS NOT NULL)
+      )
+    );
+
+    CREATE TABLE IF NOT EXISTS ramp_spend_snapshots (
+      source_hash TEXT PRIMARY KEY,
+      card_fingerprint TEXT NOT NULL,
+      cutoff_at TEXT NOT NULL,
+      actual_spend_cents INTEGER NOT NULL CHECK (actual_spend_cents >= 0),
+      source_transaction_count INTEGER NOT NULL
+        CHECK (source_transaction_count >= 0),
+      created_at TEXT NOT NULL,
+      last_observed_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS ramp_spend_snapshots_cutoff
+      ON ramp_spend_snapshots(cutoff_at, last_observed_at, source_hash);
 
     CREATE TRIGGER IF NOT EXISTS problems_insert_pools
     AFTER INSERT ON problems
@@ -397,6 +440,12 @@ export function initializeLedgerSchema(database) {
     "general_credit",
     "debt_cents",
     "INTEGER NOT NULL DEFAULT 0 CHECK (debt_cents >= 0)",
+  );
+  ensureColumn(
+    database,
+    "funding_events",
+    "funding_source",
+    "TEXT NOT NULL DEFAULT 'settled' CHECK (funding_source IN ('settled', 'owner_prefunded'))",
   );
 
   database.prepare(`

@@ -1,4 +1,8 @@
 import { assertPort } from "#indiemath/shared";
+import {
+  extractStripeChargeId,
+  extractStripePaymentIntentId,
+} from "#indiemath/stripe";
 
 const DISPUTE_CHECKPOINT_SOURCE = "stripe-disputes";
 const DISPUTE_OVERLAP_MILLISECONDS = 7 * 24 * 60 * 60 * 1_000;
@@ -9,7 +13,6 @@ export async function executeStripeRefund({
   stripe,
   donationDedupId,
   idempotencyReference,
-  requestedAmountCents,
 }) {
   assertPort(ledger, "ledger", [
     "beginRefund",
@@ -17,17 +20,22 @@ export async function executeStripeRefund({
     "completeRefund",
     "getDonation",
   ]);
-  assertPort(stripe, "Stripe", ["refundCharge"]);
+  assertPort(stripe, "Stripe", ["refundPayment"]);
   const donation = ledger.getDonation(donationDedupId);
-  const chargeId = donation.source?.metadata?.stripeChargeId;
-  if (!chargeId) {
+  const metadata = donation.source?.metadata;
+  const chargeId = metadata?.stripeChargeId
+    ?? extractStripeChargeId(metadata?.paymentProcessorUrl);
+  const paymentIntentId = chargeId
+    ? undefined
+    : metadata?.stripePaymentIntentId
+      ?? extractStripePaymentIntentId(metadata?.paymentProcessorUrl);
+  if (!chargeId && !paymentIntentId) {
     throw new Error(
-      `Donation ${donationDedupId} has no reconciled Stripe charge reference.`,
+      `Donation ${donationDedupId} has no Stripe payment reference.`,
     );
   }
   const pending = ledger.beginRefund({
     donationDedupId,
-    requestedAmountCents,
     idempotencyReference,
   });
   if (pending.adjustment.status === "completed") {
@@ -38,8 +46,8 @@ export async function executeStripeRefund({
   }
 
   try {
-    const provider = await stripe.refundCharge({
-      chargeId,
+    const provider = await stripe.refundPayment({
+      ...(chargeId ? { chargeId } : { paymentIntentId }),
       amountCents: -pending.adjustment.amountCents,
       idempotencyReference,
     });

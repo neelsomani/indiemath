@@ -45,28 +45,47 @@ test("publisher emits complete deterministic state and a privacy-minimized ledge
     const fixture = await createFixture(context);
     const source = fixture.ledger.publicationSnapshot();
     const generatedAt = "2026-08-10T12:00:00.000Z";
-    const firstBuild = buildPublicDocuments({ source, generatedAt });
-    const replayBuild = buildPublicDocuments({ source, generatedAt });
+    const runsPausedReason = "anthropic-monthly-plan-limit";
+    const firstBuild = buildPublicDocuments({
+      source,
+      generatedAt,
+      runsPausedReason,
+    });
+    const replayBuild = buildPublicDocuments({
+      source,
+      generatedAt,
+      runsPausedReason,
+    });
 
     assert.equal(firstBuild.stateBody, replayBuild.stateBody);
     assert.equal(firstBuild.ledgerBody, replayBuild.ledgerBody);
     assert.equal(firstBuild.publicationId, replayBuild.publicationId);
     const state = parsePublisherSnapshot(JSON.parse(firstBuild.stateBody));
     const publicLedger = parsePublicLedger(JSON.parse(firstBuild.ledgerBody));
+    const rolloutLedger = JSON.parse(firstBuild.ledgerBody);
+    delete rolloutLedger.accounting.approximateRunSpendCents;
+    assert.equal(
+      parsePublicLedger(rolloutLedger).accounting.approximateRunSpendCents,
+      rolloutLedger.accounting.settledSpendCents,
+    );
     assert.equal(state.publicationId, publicLedger.publicationId);
     assert.equal(state.ledgerSha256, sha256(firstBuild.ledgerBody));
     assert.equal(state.catalogRevision, catalog.catalog_revision);
+    assert.deepEqual(state.runControl, {
+      paused: true,
+      reason: "anthropic-monthly-plan-limit",
+    });
     assert.equal(state.problems.length, catalog.problems.length);
-    assert.equal(state.unprocessedCents, 8_000);
+    assert.equal(state.unprocessedCents, 0);
     assert.equal(
       state.problems.find((problem) => problem.problemId === firstProblem.id)
         .unprocessedCents,
-      8_000,
+      0,
     );
     assert.equal(
       publicLedger.donations.find((donation) => donation.dedupId === "txn-late")
         .remainingCents,
-      8_000,
+      0,
     );
     assert.equal(
       publicLedger.donations.find((donation) => donation.dedupId === "txn-first")
@@ -79,7 +98,19 @@ test("publisher emits complete deterministic state and a privacy-minimized ledge
       "reversed",
     );
     assert.equal(publicLedger.runs.length, 4);
+    assert.equal(source.claims.length, 5);
+    assert.equal(
+      publicLedger.runs.some((run) => run.claimTs === fixture.failedClaim.claimTs),
+      false,
+    );
     assert.equal(publicLedger.runs.filter((run) => run.status === "running").length, 1);
+    assert.equal(publicLedger.accounting.approximateRunSpendCents, 2_000);
+    assert.deepEqual(publicLedger.rampSpend, {
+      actualSpendCents: 12_345,
+      sourceTransactionCount: 2,
+      cutoffAt: "2026-08-10T11:00:00.000Z",
+      lastObservedAt: "2026-08-10T12:00:00.000Z",
+    });
     assert.equal(publicLedger.runs[0].transcriptSegments.length, 1);
     assert.match(
       publicLedger.runs[0].transcriptSegments[0].humanTranscriptKey,
@@ -111,11 +142,15 @@ test("publisher emits complete deterministic state and a privacy-minimized ledge
       "funding-private-reference",
       "refund-private-reference",
       "provider-refund-private",
+      "ramp-private-card-fingerprint",
+      "ramp-private-source-hash",
     ]) {
       assert.doesNotMatch(firstBuild.stateBody, new RegExp(forbidden));
       assert.doesNotMatch(firstBuild.ledgerBody, new RegExp(forbidden));
     }
     assert.match(firstBuild.ledgerBody, /"donorTag":"Ada"/);
+    assert.equal("cardFingerprint" in publicLedger.rampSpend, false);
+    assert.equal("sourceHash" in publicLedger.rampSpend, false);
     assert.equal(source.accounting.balanced, true);
   });
 
@@ -197,6 +232,41 @@ test("state.json is the atomic commit point for an immutable ledger generation",
         (donation) => donation.dedupId === "txn-after-commit",
       ),
       true,
+    );
+  });
+
+test("catalog omissions are excluded from publication and sampling but retain history",
+  async (context) => {
+    const fixture = await createFixture(context);
+    const revised = structuredClone(catalog);
+    revised.catalog_revision += 1;
+    const omittedProblem = revised.problems.pop();
+    await syncCatalog({ catalog: revised, databasePath: fixture.databasePath });
+
+    const documents = buildPublicDocuments({
+      source: fixture.ledger.publicationSnapshot(),
+      generatedAt: "2026-08-10T12:30:00.000Z",
+    });
+    const state = parsePublisherSnapshot(JSON.parse(documents.stateBody));
+    assert.equal(state.problems.length, revised.problems.length);
+    assert.equal(
+      state.problems.some((problem) => problem.problemId === omittedProblem.id),
+      false,
+    );
+    assert.equal(
+      fixture.ledger.samplingSnapshot().pairs.some(
+        (pair) => pair.problemId === omittedProblem.id,
+      ),
+      false,
+    );
+    assert.throws(
+      () => fixture.ledger.claim({
+        problemId: omittedProblem.id,
+        direction: "prove",
+        runBudgetCents: 5_000,
+        workerId: "worker-4",
+      }),
+      (error) => error?.code === "problem-not-current",
     );
   });
 
@@ -282,7 +352,6 @@ async function createFixture(context) {
   });
   ledger.beginRefund({
     donationDedupId: "txn-late",
-    requestedAmountCents: 2_000,
     idempotencyReference: "refund-private-reference",
   });
   ledger.recordSettlementSnapshot({
@@ -357,8 +426,31 @@ async function createFixture(context) {
     finalSpentCents: 0,
     solutionUri: `r2://solutions/${thirdProblem.id}/disprove/${secondary.claimTs}.md`,
   });
+  ledger.recordRampSpendSnapshot({
+    cardFingerprint: createHash("sha256")
+      .update("ramp-private-card-fingerprint")
+      .digest("hex"),
+    cutoffAt: "2026-08-10T11:00:00.000Z",
+    actualSpendCents: 12_345,
+    sourceTransactionCount: 2,
+    sourceHash: createHash("sha256")
+      .update("ramp-private-source-hash")
+      .digest("hex"),
+  });
   ledger.assertConservation();
-  return { ledger };
+  const failedClaim = ledger.claim({
+    problemId: firstProblem.id,
+    direction: "disprove",
+    runBudgetCents: 5_000,
+    workerId: "worker-1",
+    fundingMode: "general-only",
+  });
+  ledger.settle({
+    ...failedClaim,
+    finalSpentCents: 0,
+  });
+  ledger.assertConservation();
+  return { databasePath, ledger, failedClaim };
 }
 
 function donate(ledger, {

@@ -27,8 +27,10 @@ export {
   settleExpiredClaims,
 } from "./recovery.mjs";
 export {
-  bootstrapFableMathContexts,
-} from "./fable-context-bootstrap.mjs";
+  parsePriorResearchManifest,
+  PRIOR_RESEARCH_MANIFEST_KEY,
+  verifyPriorResearchContexts,
+} from "./prior-research.mjs";
 export {
   runSamplingCycle,
   runWorkerLoop,

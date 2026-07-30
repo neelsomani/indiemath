@@ -43,7 +43,7 @@ export function readCatalogStatus(databasePath) {
     if (!sync) throw new Error(`No catalog has been synced to ${databasePath}.`);
 
     const counts = database.prepare(
-      "SELECT COUNT(*) AS problem_count FROM problems",
+      "SELECT COUNT(*) AS problem_count FROM problems WHERE catalog_present = 1",
     ).get();
     return {
       schema_version: Number(sync.schema_version),
@@ -99,15 +99,9 @@ function syncInsideTransaction(database, catalog) {
     "SELECT problem_id, identity_hash, metadata_json FROM problems ORDER BY problem_id",
   ).all();
   const incomingById = new Map(catalog.problems.map((problem) => [problem.id, problem]));
-
-  for (const existing of existingRows) {
-    if (!incomingById.has(existing.problem_id)) {
-      throw new Error(
-        `Catalog omits previously issued problem_id ${existing.problem_id}. `
-        + "Problem removal is not supported.",
-      );
-    }
-  }
+  const omittedIds = existingRows
+    .filter((existing) => !incomingById.has(existing.problem_id))
+    .map((existing) => existing.problem_id);
 
   let added = 0;
   let updated = 0;
@@ -131,6 +125,11 @@ function syncInsideTransaction(database, catalog) {
   database.prepare(
     "UPDATE problems SET slug = '__catalog_sync__-' || rowid",
   ).run();
+  database.prepare("UPDATE problems SET catalog_present = 0").run();
+  const removeTierMappings = database.prepare(
+    "DELETE FROM open_collective_tiers WHERE problem_id = ?",
+  );
+  for (const problemId of omittedIds) removeTierMappings.run(problemId);
 
   const upsert = database.prepare(`
     INSERT INTO problems (
@@ -145,10 +144,15 @@ function syncInsideTransaction(database, catalog) {
       prove_prompt,
       disprove_prompt,
       source_json,
-      metadata_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      metadata_json,
+      catalog_present
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
     ON CONFLICT(problem_id) DO UPDATE SET
-      catalog_revision = excluded.catalog_revision,
+      catalog_revision = CASE
+        WHEN problems.metadata_json = excluded.metadata_json
+          THEN problems.catalog_revision
+        ELSE excluded.catalog_revision
+      END,
       slug = excluded.slug,
       domain = excluded.domain,
       title = excluded.title,
@@ -156,7 +160,8 @@ function syncInsideTransaction(database, catalog) {
       prove_prompt = excluded.prove_prompt,
       disprove_prompt = excluded.disprove_prompt,
       source_json = excluded.source_json,
-      metadata_json = excluded.metadata_json
+      metadata_json = excluded.metadata_json,
+      catalog_present = 1
   `);
 
   for (const problem of catalog.problems) {

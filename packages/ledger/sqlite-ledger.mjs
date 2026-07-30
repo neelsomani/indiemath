@@ -5,6 +5,7 @@ import {
   addCents,
   asCents,
   calculateAvailableToFundCents,
+  calculateOutstandingOwnerAdvanceCents,
   calculateRefundableCents,
   calculateSettledButUnfundedCents,
   deriveDonationRefundState,
@@ -26,6 +27,7 @@ import {
 const RESIDUE_FLOOR_CENTS = MINIMUM_RUN_BUDGET_CENTS;
 const LEASE_MILLISECONDS = 65 * 60 * 1000;
 const FUNDING_MODES = new Set(["pool-first", "pool-only", "general-only"]);
+const FUNDING_SOURCES = new Set(["settled", "owner_prefunded"]);
 const SQLITE_WRITE_RETRY_CLOCK = new Int32Array(new SharedArrayBuffer(4));
 const SQLITE_WRITE_RETRY_LIMIT = 80;
 
@@ -114,7 +116,7 @@ export class SQLiteLedger {
 
       let destination = proposed.destination;
       if (destination.kind === "pool") {
-        const problem = this.#requireProblem(destination.problemId);
+        const problem = this.#requireCurrentProblem(destination.problemId);
         this.#requirePool(destination.problemId, destination.direction);
         if (problem.status === "Solved") destination = { kind: "general" };
       }
@@ -206,7 +208,7 @@ export class SQLiteLedger {
     }
 
     return this.#transaction(() => {
-      const problem = this.#requireProblem(parsedProblemId);
+      const problem = this.#requireCurrentProblem(parsedProblemId);
       if (problem.status !== "Open") {
         throw new LedgerError(
           "problem-not-open",
@@ -739,6 +741,7 @@ export class SQLiteLedger {
     amountCents,
     externalReference,
     settledContributionCents,
+    fundingSource = "settled",
     fundedAt,
   }) {
     const amount = positiveCents(amountCents, "amountCents");
@@ -747,6 +750,12 @@ export class SQLiteLedger {
       settledContributionCents,
       "settledContributionCents",
     );
+    const source = requiredString(fundingSource, "fundingSource");
+    if (!FUNDING_SOURCES.has(source)) {
+      throw new TypeError(
+        "fundingSource must be one of: settled, owner_prefunded.",
+      );
+    }
     const timestamp = fundedAt === undefined
       ? this.#now().iso
       : parseTimestamp(fundedAt, "fundedAt");
@@ -759,6 +768,7 @@ export class SQLiteLedger {
         if (
           Number(existing.amount_cents) !== amount
           || Number(existing.settled_contribution_cents) !== settled
+          || existing.funding_source !== source
         ) {
           throw new LedgerError(
             "idempotency-conflict",
@@ -783,18 +793,47 @@ export class SQLiteLedger {
       }
 
       const totals = this.#treasuryAdjustmentTotals();
+      const settlementScope = this.#latestSettlementScope();
+      const settledTotals = settlementScope.settledContributionCents === settled
+        ? this.#treasuryAdjustmentTotals(settlementScope.donationIds)
+        : totals;
       const fundingEventCents = this.#fundingTotal();
+      if (source === "owner_prefunded" && totals.pendingRefundCents > 0) {
+        throw new LedgerError(
+          "pending-refunds",
+          "Owner-prefunded staging is blocked while any refund is pending.",
+        );
+      }
       const available = calculateAvailableToFundCents({
         settledContributionCents: settled,
         completedRefundCents: totals.completedRefundCents,
+        settledCompletedRefundCents: settledTotals.completedRefundCents,
         fundingEventCents,
         pendingRefundCents: totals.pendingRefundCents,
+        settledPendingRefundCents: settledTotals.pendingRefundCents,
       });
-      if (amount > available) {
+      if (source === "settled" && amount > available) {
         throw new LedgerError(
           "insufficient-settled-funds",
           `Funding amount ${amount} exceeds available-to-fund ${available}.`,
         );
+      }
+      if (source === "owner_prefunded") {
+        const effectiveDonationCents = this.#waterlineStatuses().reduce(
+          (total, donation) => addCents(total, donation.effectiveNetCents),
+          0,
+        );
+        const remainingDonationCoverageCents = Math.max(
+          0,
+          effectiveDonationCents - fundingEventCents,
+        );
+        if (amount > remainingDonationCoverageCents) {
+          throw new LedgerError(
+            "owner-prefund-exceeds-received",
+            `Owner-prefunded amount ${amount} exceeds remaining received `
+              + `contribution coverage ${remainingDonationCoverageCents}.`,
+          );
+        }
       }
 
       this.#database.prepare(`
@@ -802,50 +841,87 @@ export class SQLiteLedger {
           external_reference,
           amount_cents,
           settled_contribution_cents,
+          funding_source,
           funded_at
-        ) VALUES (?, ?, ?, ?)
-      `).run(reference, amount, settled, timestamp);
+        ) VALUES (?, ?, ?, ?, ?)
+      `).run(reference, amount, settled, source, timestamp);
       return {
         outcome: "funded",
         fundingEvent: {
           externalReference: reference,
           amountCents: amount,
           settledContributionCents: settled,
+          fundingSource: source,
           fundedAt: timestamp,
         },
       };
     });
   }
 
-  treasuryStatus({ settledContributionCents } = {}) {
+  treasuryStatus({ settledContributionCents, settledDonationIds } = {}) {
     this.#assertOpen();
+    const settlementScope = this.#latestSettlementScope();
     const settled = settledContributionCents === undefined
-      ? this.#latestSettledContributionSnapshot()
+      ? settlementScope.settledContributionCents
       : asCents(settledContributionCents, "settledContributionCents");
     const totals = this.#treasuryAdjustmentTotals();
+    const scopedDonationIds = settledDonationIds === undefined
+      ? settlementScope.settledContributionCents === settled
+        ? settlementScope.donationIds
+        : undefined
+      : new Set(settledDonationIds.map((dedupId) => (
+          requiredString(dedupId, "settledDonationIds[]")
+        )));
+    const settledTotals = this.#treasuryAdjustmentTotals(scopedDonationIds);
     const fundingEventCents = this.#fundingTotal();
     const settledButUnfundedCents = calculateSettledButUnfundedCents({
       settledContributionCents: settled,
       completedRefundCents: totals.completedRefundCents,
+      settledCompletedRefundCents: settledTotals.completedRefundCents,
+      fundingEventCents,
+    });
+    const outstandingOwnerAdvanceCents = calculateOutstandingOwnerAdvanceCents({
+      settledContributionCents: settled,
+      completedRefundCents: totals.completedRefundCents,
+      settledCompletedRefundCents: settledTotals.completedRefundCents,
       fundingEventCents,
     });
     const availableToFundCents = calculateAvailableToFundCents({
       settledContributionCents: settled,
       completedRefundCents: totals.completedRefundCents,
+      settledCompletedRefundCents: settledTotals.completedRefundCents,
       fundingEventCents,
       pendingRefundCents: totals.pendingRefundCents,
+      settledPendingRefundCents: settledTotals.pendingRefundCents,
     });
     const liveReservationsCents = this.#liveReservationTotal();
     return Object.freeze({
       settledContributionCents: settled,
       completedRefundCents: totals.completedRefundCents,
       pendingRefundCents: totals.pendingRefundCents,
+      settledCompletedRefundCents: settledTotals.completedRefundCents,
+      settledPendingRefundCents: settledTotals.pendingRefundCents,
       fundingEventCents,
       settledButUnfundedCents,
+      outstandingOwnerAdvanceCents,
       availableToFundCents,
       spendableCapacityCents: this.#spendableCapacity(),
       liveReservationsCents,
     });
+  }
+
+  quoteRefund({
+    donationDedupId,
+    requestedAmountCents,
+  }) {
+    const dedupId = requiredString(donationDedupId, "donationDedupId");
+    const requested = requestedAmountCents === undefined
+      ? undefined
+      : positiveCents(requestedAmountCents, "requestedAmountCents");
+    return this.#readTransaction(() => this.#quoteRefundInside({
+      dedupId,
+      requested,
+    }));
   }
 
   beginRefund({
@@ -883,41 +959,12 @@ export class SQLiteLedger {
         return { outcome: "duplicate", adjustment: mapAdjustment(existing) };
       }
 
+      const quote = this.#quoteRefundInside({ dedupId, requested });
+      if (!quote.eligible) {
+        throw new LedgerError(quote.reason, quote.message);
+      }
       const donation = this.#requireDonationRow(dedupId);
-      if (donation.payment_state !== "credited") {
-        throw new LedgerError(
-          "donation-not-refundable",
-          `Donation ${dedupId} is ${donation.payment_state}.`,
-        );
-      }
-      const waterlineStatus = this.#waterlineStatuses().find(
-        (entry) => entry.dedupId === dedupId,
-      );
-      if (waterlineStatus?.processed === true) {
-        throw new LedgerError(
-          "donation-processed",
-          `Donation ${dedupId} is processed and no longer refundable.`,
-        );
-      }
-      const pendingRefundCents = this.#refundAmount(dedupId, "pending");
-      const destinationBalanceCents = Math.max(
-        0,
-        this.#destinationBalance(donation),
-      );
-      const refundableCents = calculateRefundableCents({
-        donationDedupId: dedupId,
-        donations: this.#waterlineDonations(),
-        fundedCents: this.#fundingTotal(),
-        pendingRefundCents,
-        destinationBalanceCents,
-        requestedCents: requested,
-      });
-      if (refundableCents === 0) {
-        throw new LedgerError(
-          "nothing-refundable",
-          `Donation ${dedupId} has no refundable balance.`,
-        );
-      }
+      const refundableCents = quote.refundableCents;
 
       this.#changeDestinationBalance(donation, -refundableCents);
       const createdAt = this.#now().iso;
@@ -936,6 +983,7 @@ export class SQLiteLedger {
       return {
         outcome: "pending",
         adjustment: mapAdjustment(this.#requireAdjustment(reference)),
+        quote,
       };
     });
   }
@@ -1138,52 +1186,245 @@ export class SQLiteLedger {
     const reference = requiredString(externalReference, "externalReference");
     const parsedNote = requiredString(note, "note");
     return this.#transaction(() => {
-      const existing = this.#database.prepare(
-        "SELECT * FROM adjustments WHERE external_reference = ?",
-      ).get(reference);
+      return this.#applyReconciliationInside({
+        amount,
+        reference,
+        note: parsedNote,
+        now: this.#now().iso,
+      });
+    });
+  }
+
+  reconcileAnthropicSpend({
+    cutoffAt,
+    actualSpendCents,
+    externalReference,
+    note,
+  }) {
+    const cutoff = requiredTimestamp(cutoffAt, "cutoffAt");
+    const actual = asCents(actualSpendCents, "actualSpendCents");
+    const reference = requiredString(externalReference, "externalReference");
+    const parsedNote = requiredString(note, "note");
+    return this.#transaction(() => {
+      const now = this.#now().iso;
+      if (Date.parse(cutoff) > Date.parse(now)) {
+        throw new RangeError("cutoffAt cannot be in the future.");
+      }
+      const existing = this.#database.prepare(`
+        SELECT * FROM anthropic_spend_reconciliations
+        WHERE external_reference = ?
+      `).get(reference);
       if (existing) {
         if (
-          existing.reason_code !== "reconciliation"
-          || Number(existing.amount_cents) !== amount
+          existing.cutoff_at !== cutoff
+          || Number(existing.actual_spend_cents) !== actual
           || existing.note !== parsedNote
         ) {
           throw new LedgerError(
             "idempotency-conflict",
-            `Adjustment reference ${reference} already has different values.`,
+            `Anthropic spend reference ${reference} already has different values.`,
           );
         }
-        return { outcome: "duplicate", adjustment: mapAdjustment(existing) };
+        return Object.freeze({
+          outcome: "duplicate",
+          reconciliation: mapAnthropicSpendReconciliation(existing),
+          adjustment: existing.adjustment_external_reference
+            ? mapAdjustment(this.#requireAdjustment(
+                existing.adjustment_external_reference,
+              ))
+            : undefined,
+        });
       }
-      if (amount > 0) {
-        this.#setGeneralBalance(addCents(this.#generalBalance(), amount));
-      } else {
-        const debit = Math.min(this.#claimableGeneralBalance(), -amount);
-        if (debit > 0) {
-          this.#setGeneralBalance(addCents(this.#generalBalance(), -debit));
-        }
-        const shortfall = -amount - debit;
-        if (shortfall > 0) {
-          this.#setGeneralDebt(addCents(this.#generalDebt(), shortfall));
-        }
+
+      const cutoffConflict = this.#database.prepare(`
+        SELECT external_reference
+        FROM anthropic_spend_reconciliations
+        WHERE cutoff_at = ?
+      `).get(cutoff);
+      if (cutoffConflict) {
+        throw new LedgerError(
+          "reconciliation-cutoff-conflict",
+          `Anthropic spend cutoff ${cutoff} already belongs to `
+          + `${cutoffConflict.external_reference}.`,
+        );
       }
-      const now = this.#now().iso;
+      const previous = this.#database.prepare(`
+        SELECT * FROM anthropic_spend_reconciliations
+        ORDER BY cutoff_at DESC, created_at DESC
+        LIMIT 1
+      `).get();
+      if (previous && Date.parse(cutoff) <= Date.parse(previous.cutoff_at)) {
+        throw new LedgerError(
+          "reconciliation-cutoff-regression",
+          `Anthropic spend cutoff must be later than ${previous.cutoff_at}.`,
+        );
+      }
+      if (previous && actual < Number(previous.actual_spend_cents)) {
+        throw new LedgerError(
+          "reconciliation-actual-regression",
+          "Cumulative Anthropic spend cannot move backward from "
+          + `${previous.actual_spend_cents} cents.`,
+        );
+      }
+
+      // Anthropic groups usage by request start time, so the cumulative ledger
+      // side uses the same exclusive upper boundary.
+      const ledgerApplied = sumRows(this.#database.prepare(`
+        SELECT applied_cost_cents AS amount
+        FROM claim_responses
+        WHERE request_started_at < ?
+      `).all(cutoff));
+      const targetCorrection = addCents(ledgerApplied, -actual);
+      const previousTarget = Number(previous?.target_correction_cents ?? 0);
+      const appliedCorrection = addCents(targetCorrection, -previousTarget);
+      const adjustmentReference = appliedCorrection === 0
+        ? null
+        : `anthropic-spend:${reference}`;
+      let adjustment;
+      if (adjustmentReference) {
+        adjustment = this.#applyReconciliationInside({
+          amount: appliedCorrection,
+          reference: adjustmentReference,
+          note: `Anthropic actual spend through ${cutoff}: ${parsedNote}`,
+          now,
+        }).adjustment;
+      }
+
       this.#database.prepare(`
-        INSERT INTO adjustments (
-          adjustment_id,
-          reason_code,
-          amount_cents,
+        INSERT INTO anthropic_spend_reconciliations (
           external_reference,
-          status,
+          cutoff_at,
+          actual_spend_cents,
+          ledger_applied_spend_cents,
+          target_correction_cents,
+          applied_correction_cents,
+          adjustment_external_reference,
           note,
-          created_at,
-          resolved_at
-        ) VALUES (?, 'reconciliation', ?, ?, 'completed', ?, ?, ?)
-      `).run(`reconciliation:${reference}`, amount, reference, parsedNote, now, now);
-      return {
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        reference,
+        cutoff,
+        actual,
+        ledgerApplied,
+        targetCorrection,
+        appliedCorrection,
+        adjustmentReference,
+        parsedNote,
+        now,
+      );
+      return Object.freeze({
         outcome: "completed",
-        adjustment: mapAdjustment(this.#requireAdjustment(reference)),
-      };
+        reconciliation: mapAnthropicSpendReconciliation(
+          this.#database.prepare(`
+            SELECT * FROM anthropic_spend_reconciliations
+            WHERE external_reference = ?
+          `).get(reference),
+        ),
+        adjustment,
+      });
     });
+  }
+
+  recordRampSpendSnapshot({
+    cardFingerprint,
+    cutoffAt,
+    actualSpendCents,
+    sourceTransactionCount,
+    sourceHash,
+  }) {
+    const card = sha256String(cardFingerprint, "cardFingerprint");
+    const cutoff = requiredTimestamp(cutoffAt, "cutoffAt");
+    const actual = asCents(actualSpendCents, "actualSpendCents");
+    const transactionCount = nonnegativeSafeInteger(
+      sourceTransactionCount,
+      "sourceTransactionCount",
+    );
+    const hash = sha256String(sourceHash, "sourceHash");
+    return this.#transaction(() => {
+      const now = this.#now().iso;
+      if (Date.parse(cutoff) > Date.parse(now)) {
+        throw new RangeError("cutoffAt cannot be in the future.");
+      }
+      const latest = this.#database.prepare(`
+        SELECT * FROM ramp_spend_snapshots
+        ORDER BY cutoff_at DESC, last_observed_at DESC, source_hash DESC
+        LIMIT 1
+      `).get();
+      if (latest && latest.card_fingerprint !== card) {
+        throw new LedgerError(
+          "ramp-card-changed",
+          "Ramp card fingerprint changed; migrate the spend baseline explicitly.",
+        );
+      }
+      if (latest && Date.parse(cutoff) < Date.parse(latest.cutoff_at)) {
+        throw new LedgerError(
+          "ramp-cutoff-regression",
+          `Ramp spend cutoff cannot move backward from ${latest.cutoff_at}.`,
+        );
+      }
+      const existing = this.#database.prepare(`
+        SELECT * FROM ramp_spend_snapshots WHERE source_hash = ?
+      `).get(hash);
+      if (existing) {
+        if (
+          existing.card_fingerprint !== card
+          || Number(existing.actual_spend_cents) !== actual
+          || Number(existing.source_transaction_count) !== transactionCount
+        ) {
+          throw new LedgerError(
+            "idempotency-conflict",
+            `Ramp spend source hash ${hash} already has different values.`,
+          );
+        }
+        this.#database.prepare(`
+          UPDATE ramp_spend_snapshots
+          SET cutoff_at = ?, last_observed_at = ?
+          WHERE source_hash = ?
+        `).run(cutoff, now, hash);
+        return Object.freeze({
+          outcome: "duplicate",
+          snapshot: mapRampSpendSnapshot(this.#database.prepare(`
+            SELECT * FROM ramp_spend_snapshots WHERE source_hash = ?
+          `).get(hash)),
+        });
+      }
+      this.#database.prepare(`
+        INSERT INTO ramp_spend_snapshots (
+          source_hash,
+          card_fingerprint,
+          cutoff_at,
+          actual_spend_cents,
+          source_transaction_count,
+          created_at,
+          last_observed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        hash,
+        card,
+        cutoff,
+        actual,
+        transactionCount,
+        now,
+        now,
+      );
+      return Object.freeze({
+        outcome: "recorded",
+        snapshot: mapRampSpendSnapshot(this.#database.prepare(`
+          SELECT * FROM ramp_spend_snapshots WHERE source_hash = ?
+        `).get(hash)),
+      });
+    });
+  }
+
+  latestRampSpendSnapshot() {
+    this.#assertOpen();
+    const row = this.#database.prepare(`
+      SELECT * FROM ramp_spend_snapshots
+      ORDER BY cutoff_at DESC, last_observed_at DESC, source_hash DESC
+      LIMIT 1
+    `).get();
+    return row ? mapRampSpendSnapshot(row) : undefined;
   }
 
   getDonation(dedupId) {
@@ -1255,6 +1496,7 @@ export class SQLiteLedger {
       ? this.#now().iso
       : requiredTimestamp(syncedAt, "syncedAt");
     return this.#transaction(() => {
+      this.#requireCurrentProblem(parsedProblemId);
       this.#requirePool(parsedProblemId, parsedDirection);
       const current = this.#database.prepare(`
         SELECT * FROM open_collective_tiers
@@ -1725,6 +1967,7 @@ export class SQLiteLedger {
           ON claims.problem_id = pools.problem_id
           AND claims.direction = pools.direction
           AND claims.settled = 0
+        WHERE problems.catalog_present = 1
         ORDER BY pools.problem_id, pools.direction
       `).all().map((row) => Object.freeze({
         problemId: row.problem_id,
@@ -1768,6 +2011,18 @@ export class SQLiteLedger {
       WHERE problem_id = ? AND direction = ? AND claim_ts = ?
       ORDER BY sequence
     `).all(parsed.problemId, parsed.direction, parsed.claimTs).map(mapClaimResponse));
+  }
+
+  listPairClaimResponses({ problemId, direction }) {
+    this.#assertOpen();
+    const parsedProblemId = parseProblemId(problemId);
+    const parsedDirection = parseDirection(direction);
+    this.#requireProblem(parsedProblemId);
+    return Object.freeze(this.#database.prepare(`
+      SELECT claim_responses.* FROM claim_responses
+      WHERE problem_id = ? AND direction = ?
+      ORDER BY claim_ts, sequence
+    `).all(parsedProblemId, parsedDirection).map(mapClaimResponse));
   }
 
   listWorkerClaimResponses({
@@ -1882,6 +2137,14 @@ export class SQLiteLedger {
       SELECT * FROM settlement_snapshots
       ORDER BY cutoff_at, snapshot_id
     `).all().map(mapSettlementSnapshot);
+    const anthropicSpendReconciliations = this.#database.prepare(`
+      SELECT * FROM anthropic_spend_reconciliations
+      ORDER BY cutoff_at, external_reference
+    `).all().map(mapAnthropicSpendReconciliation);
+    const rampSpendSnapshots = this.#database.prepare(`
+      SELECT * FROM ramp_spend_snapshots
+      ORDER BY cutoff_at, last_observed_at, source_hash
+    `).all().map(mapRampSpendSnapshot);
     return Object.freeze({
       problems: Object.freeze(problems),
       pools: Object.freeze(pools),
@@ -1895,6 +2158,11 @@ export class SQLiteLedger {
       intakeCheckpoints: Object.freeze(intakeCheckpoints),
       settlementRecords: Object.freeze(settlementRecords),
       settlementSnapshots: Object.freeze(settlementSnapshots),
+      anthropicSpendReconciliations: Object.freeze(
+        anthropicSpendReconciliations,
+      ),
+      rampSpendSnapshots: Object.freeze(rampSpendSnapshots),
+      rampSpend: rampSpendSnapshots.at(-1),
       generalCreditCents: this.#generalBalance(),
       generalDebtCents: this.#generalDebt(),
       claimableGeneralCreditCents: this.#claimableGeneralBalance(
@@ -1914,6 +2182,9 @@ export class SQLiteLedger {
     );
     const settledSpendCents = sumRows(this.#database.prepare(
       "SELECT spent_cents AS amount FROM claims WHERE settled = 1",
+    ).all());
+    const approximateRunSpendCents = sumRows(this.#database.prepare(
+      "SELECT spent_cents AS amount FROM claims",
     ).all());
     const liveReservationCents = this.#liveReservationTotal();
     const includedAdjustments = this.#database.prepare(`
@@ -1947,6 +2218,7 @@ export class SQLiteLedger {
       generalCreditCents,
       generalDebtCents,
       settledSpendCents,
+      approximateRunSpendCents,
       liveReservationCents,
       adjustmentOutflowsCents,
       accountedCents,
@@ -1964,6 +2236,82 @@ export class SQLiteLedger {
       );
     }
     return snapshot;
+  }
+
+  #quoteRefundInside({ dedupId, requested }) {
+    const donation = this.#requireDonationRow(dedupId);
+    const pendingRefundCents = this.#refundAmount(dedupId, "pending");
+    const destinationBalanceCents = Math.max(
+      0,
+      this.#destinationBalance(donation),
+    );
+    const waterlineStatus = this.#waterlineStatuses().find(
+      (entry) => entry.dedupId === dedupId,
+    );
+    const completedRefundCents = this.#refundAmount(dedupId, "completed");
+    const effectiveNetCents = addCents(
+      Number(donation.net_cents),
+      -completedRefundCents,
+      -Number(donation.waterline_excluded_cents),
+    );
+    const common = {
+      donationDedupId: dedupId,
+      requestedAmountCents: requested,
+      completedRefundCents,
+      pendingRefundCents,
+      effectiveNetCents,
+      remainingDonationCents: Math.max(
+        0,
+        effectiveNetCents - pendingRefundCents,
+      ),
+      destinationBalanceCents,
+      processed: waterlineStatus?.processed === true,
+      processingStatus: donation.payment_state !== "credited"
+        ? donation.payment_state
+        : waterlineStatus?.processed === true
+          ? "processed"
+          : "received",
+    };
+    if (donation.payment_state !== "credited") {
+      return Object.freeze({
+        ...common,
+        eligible: false,
+        refundableCents: 0,
+        reason: "donation-not-refundable",
+        message: `Donation ${dedupId} is ${donation.payment_state}.`,
+      });
+    }
+    if (waterlineStatus?.processed === true) {
+      return Object.freeze({
+        ...common,
+        eligible: false,
+        refundableCents: 0,
+        reason: "donation-processed",
+        message: `Donation ${dedupId} is processed and no longer refundable.`,
+      });
+    }
+    const refundableCents = calculateRefundableCents({
+      donationDedupId: dedupId,
+      donations: this.#waterlineDonations(),
+      fundedCents: this.#fundingTotal(),
+      pendingRefundCents,
+      destinationBalanceCents,
+      requestedCents: requested,
+    });
+    if (refundableCents === 0) {
+      return Object.freeze({
+        ...common,
+        eligible: false,
+        refundableCents,
+        reason: "nothing-refundable",
+        message: `Donation ${dedupId} has no refundable balance.`,
+      });
+    }
+    return Object.freeze({
+      ...common,
+      eligible: true,
+      refundableCents,
+    });
   }
 
   #settleInsideTransaction({
@@ -2256,13 +2604,25 @@ export class SQLiteLedger {
   }
 
   #spendableCapacity() {
-    return addCents(
-      this.#fundingTotal(),
-      -sumRows(this.#database.prepare(
-        "SELECT spent_cents AS amount FROM claims WHERE settled = 1",
-      ).all()),
-      -this.#liveReservationTotal(),
+    return Math.max(
+      0,
+      addCents(
+        this.#fundingTotal(),
+        this.#reconciliationAdjustmentTotal(),
+        -sumRows(this.#database.prepare(
+          "SELECT spent_cents AS amount FROM claims WHERE settled = 1",
+        ).all()),
+        -this.#liveReservationTotal(),
+      ),
     );
+  }
+
+  #reconciliationAdjustmentTotal() {
+    return sumRows(this.#database.prepare(`
+      SELECT amount_cents AS amount
+      FROM adjustments
+      WHERE reason_code = 'reconciliation' AND status = 'completed'
+    `).all());
   }
 
   #liveReservationTotal() {
@@ -2277,25 +2637,50 @@ export class SQLiteLedger {
     ).all());
   }
 
-  #latestSettledContributionSnapshot() {
+  #latestSettlementScope() {
     const reconciled = this.#database.prepare(`
-      SELECT settled_contribution_cents AS amount
+      SELECT settled_contribution_cents AS amount, source_json
       FROM settlement_snapshots
       ORDER BY cutoff_at DESC, created_at DESC
       LIMIT 1
     `).get();
-    if (reconciled) return Number(reconciled.amount);
+    if (reconciled) {
+      return {
+        settledContributionCents: Number(reconciled.amount),
+        donationIds: settlementDonationIds(reconciled.source_json),
+      };
+    }
     const funded = this.#database.prepare(`
       SELECT MAX(settled_contribution_cents) AS amount FROM funding_events
     `).get();
-    return Number(funded.amount ?? 0);
+    return {
+      settledContributionCents: Number(funded.amount ?? 0),
+      donationIds: funded.amount === null ? new Set() : undefined,
+    };
   }
 
-  #treasuryAdjustmentTotals() {
+  #treasuryAdjustmentTotals(donationIds) {
     return {
-      completedRefundCents: this.#refundAmount(undefined, "completed"),
-      pendingRefundCents: this.#refundAmount(undefined, "pending"),
+      completedRefundCents: this.#refundAmountForDonations(
+        "completed",
+        donationIds,
+      ),
+      pendingRefundCents: this.#refundAmountForDonations(
+        "pending",
+        donationIds,
+      ),
     };
+  }
+
+  #refundAmountForDonations(status, donationIds) {
+    if (donationIds === undefined) return this.#refundAmount(undefined, status);
+    if (donationIds.size === 0) return 0;
+    const rows = this.#database.prepare(`
+      SELECT amount_cents AS amount, donation_dedup_id
+      FROM adjustments
+      WHERE reason_code = 'refund' AND status = ?
+    `).all(status).filter((row) => donationIds.has(row.donation_dedup_id));
+    return sumRows(rows.map((row) => ({ amount: -Number(row.amount) })));
   }
 
   #refundAmount(dedupId, status) {
@@ -2446,6 +2831,63 @@ export class SQLiteLedger {
     ).run(debt);
   }
 
+  #applyReconciliationInside({ amount, reference, note, now }) {
+    const existing = this.#database.prepare(
+      "SELECT * FROM adjustments WHERE external_reference = ?",
+    ).get(reference);
+    if (existing) {
+      if (
+        existing.reason_code !== "reconciliation"
+        || Number(existing.amount_cents) !== amount
+        || existing.note !== note
+      ) {
+        throw new LedgerError(
+          "idempotency-conflict",
+          `Adjustment reference ${reference} already has different values.`,
+        );
+      }
+      return Object.freeze({
+        outcome: "duplicate",
+        adjustment: mapAdjustment(existing),
+      });
+    }
+    if (amount > 0) {
+      this.#setGeneralBalance(addCents(this.#generalBalance(), amount));
+    } else {
+      const debit = Math.min(this.#claimableGeneralBalance(), -amount);
+      if (debit > 0) {
+        this.#setGeneralBalance(addCents(this.#generalBalance(), -debit));
+      }
+      const shortfall = -amount - debit;
+      if (shortfall > 0) {
+        this.#setGeneralDebt(addCents(this.#generalDebt(), shortfall));
+      }
+    }
+    this.#database.prepare(`
+      INSERT INTO adjustments (
+        adjustment_id,
+        reason_code,
+        amount_cents,
+        external_reference,
+        status,
+        note,
+        created_at,
+        resolved_at
+      ) VALUES (?, 'reconciliation', ?, ?, 'completed', ?, ?, ?)
+    `).run(
+      `reconciliation:${reference}`,
+      amount,
+      reference,
+      note,
+      now,
+      now,
+    );
+    return Object.freeze({
+      outcome: "completed",
+      adjustment: mapAdjustment(this.#requireAdjustment(reference)),
+    });
+  }
+
   #setPoolBalances({
     problemId,
     direction,
@@ -2470,6 +2912,17 @@ export class SQLiteLedger {
     ).get(problemId);
     if (!row) throw new LedgerError("problem-not-found", `Unknown problem ${problemId}.`);
     return row;
+  }
+
+  #requireCurrentProblem(problemId) {
+    const problem = this.#requireProblem(problemId);
+    if (Number(problem.catalog_present) !== 1) {
+      throw new LedgerError(
+        "problem-not-current",
+        `Problem ${problemId} is not present in the current catalog.`,
+      );
+    }
+    return problem;
   }
 
   #requirePool(problemId, direction) {
@@ -2830,6 +3283,7 @@ function mapFundingEvent(row) {
     externalReference: row.external_reference,
     amountCents: Number(row.amount_cents),
     settledContributionCents: Number(row.settled_contribution_cents),
+    fundingSource: row.funding_source ?? "settled",
     fundedAt: row.funded_at,
   });
 }
@@ -2898,6 +3352,50 @@ function mapSettlementSnapshot(row) {
     sourceHash: row.source_hash,
     source: Object.freeze(JSON.parse(row.source_json)),
     createdAt: row.created_at,
+  });
+}
+
+function settlementDonationIds(sourceJson) {
+  let source;
+  try {
+    source = JSON.parse(sourceJson);
+  } catch (error) {
+    throw new LedgerError(
+      "settlement-source-corrupt",
+      "Settlement snapshot source is invalid JSON.",
+      { cause: error },
+    );
+  }
+  if (!Array.isArray(source.matchedDonations)) return undefined;
+  return new Set(source.matchedDonations.map((item) => (
+    requiredString(item?.donationDedupId, "matchedDonations[].donationDedupId")
+  )));
+}
+
+function mapAnthropicSpendReconciliation(row) {
+  return Object.freeze({
+    externalReference: row.external_reference,
+    cutoffAt: row.cutoff_at,
+    actualSpendCents: Number(row.actual_spend_cents),
+    ledgerAppliedSpendCents: Number(row.ledger_applied_spend_cents),
+    targetCorrectionCents: Number(row.target_correction_cents),
+    appliedCorrectionCents: Number(row.applied_correction_cents),
+    adjustmentExternalReference:
+      row.adjustment_external_reference ?? undefined,
+    note: row.note,
+    createdAt: row.created_at,
+  });
+}
+
+function mapRampSpendSnapshot(row) {
+  return Object.freeze({
+    sourceHash: row.source_hash,
+    cardFingerprint: row.card_fingerprint,
+    cutoffAt: row.cutoff_at,
+    actualSpendCents: Number(row.actual_spend_cents),
+    sourceTransactionCount: Number(row.source_transaction_count),
+    createdAt: row.created_at,
+    lastObservedAt: row.last_observed_at,
   });
 }
 
@@ -3063,6 +3561,21 @@ function requiredTimestamp(value, label) {
     throw new TypeError(`${label} must be a valid timestamp.`);
   }
   return new Date(timestamp).toISOString();
+}
+
+function sha256String(value, label) {
+  const text = requiredString(value, label);
+  if (!/^[a-f0-9]{64}$/.test(text)) {
+    throw new TypeError(`${label} must be a lowercase SHA-256 digest.`);
+  }
+  return text;
+}
+
+function nonnegativeSafeInteger(value, label) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${label} must be a nonnegative safe integer.`);
+  }
+  return value;
 }
 
 function canonicalJson(value) {

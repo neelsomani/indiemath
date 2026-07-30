@@ -13,6 +13,10 @@ import {
 import { loadAnthropicPricingTable } from "#indiemath/anthropic";
 import { openLedger } from "#indiemath/ledger";
 import {
+  DEFAULT_RUN_BUDGET_CENTS,
+  MINIMUM_RUN_BUDGET_CENTS,
+} from "#indiemath/shared";
+import {
   createWorkerRuntime,
   runSamplingCycle,
   runWorkerLoop,
@@ -39,33 +43,51 @@ const noDelayRetry = Object.freeze({
 });
 let fixtureSequence = 0;
 
-test("Rule A excludes a high-weight pair whose own runnable balance is below $500", () => {
-  const decision = selectSamplingDecision(snapshot({
+test("the sampling floor tracks request headroom and the default reservation is $50",
+  () => {
+    assert.equal(
+      MINIMUM_RUN_BUDGET_CENTS,
+      pricingTable.one_request_headroom_cents + 1,
+    );
+    assert.equal(DEFAULT_RUN_BUDGET_CENTS, 5_000);
+  });
+
+test("Rule A samples eligible balances pro rata and reserves $50 by default", () => {
+  const base = snapshot({
     capacityCents: 58_000,
     pairs: [
       pair(problemA.id, "prove", 100_000, 8_000),
       pair(problemB.id, "prove", 50_000, 50_000),
     ],
-  }), {
+  });
+  const first = selectSamplingDecision(base, {
     draw(upperExclusive) {
-      assert.equal(upperExclusive, 50_000);
-      return 49_999;
+      assert.equal(upperExclusive, 150_000);
+      return 99_999;
     },
   });
+  const second = selectSamplingDecision(base, { draw: () => 100_000 });
+  const capacityCapped = selectSamplingDecision({
+    ...base,
+    spendableCapacityCents: 2_000,
+  }, { draw: () => 0 });
 
-  assert.equal(decision.rule, "A");
-  assert.equal(decision.problemId, problemB.id);
-  assert.equal(decision.runBudgetCents, 50_000);
-  assert.equal(decision.fundingMode, "pool-only");
-  assert.equal(decision.candidateCount, 1);
+  assert.equal(first.rule, "A");
+  assert.equal(first.problemId, problemA.id);
+  assert.equal(first.runBudgetCents, 5_000);
+  assert.equal(first.fundingMode, "pool-only");
+  assert.equal(first.candidateCount, 2);
+  assert.equal(second.problemId, problemB.id);
+  assert.equal(second.runBudgetCents, 5_000);
+  assert.equal(capacityCapped.runBudgetCents, 2_000);
 });
 
-test("Rule B uses exact cent weights with no $500 floor or bucket", () => {
+test("Rule B spends the selected balance when every pool is below $50", () => {
   const base = snapshot({
     capacityCents: 40_000,
     pairs: [
-      pair(problemA.id, "prove", 12_345, 6_000),
-      pair(problemB.id, "prove", 67_891, 7_000),
+      pair(problemA.id, "prove", 12_345, 4_000),
+      pair(problemB.id, "prove", 67_891, 3_000),
     ],
   });
   const firstLastCent = selectSamplingDecision(base, {
@@ -80,9 +102,9 @@ test("Rule B uses exact cent weights with no $500 floor or bucket", () => {
 
   assert.equal(firstLastCent.rule, "B");
   assert.equal(firstLastCent.problemId, problemA.id);
-  assert.equal(firstLastCent.runBudgetCents, 6_000);
+  assert.equal(firstLastCent.runBudgetCents, 4_000);
   assert.equal(secondFirstCent.problemId, problemB.id);
-  assert.equal(secondFirstCent.runBudgetCents, 7_000);
+  assert.equal(secondFirstCent.runBudgetCents, 3_000);
   assert.equal(secondFirstCent.fundingMode, "pool-only");
 });
 
@@ -101,13 +123,13 @@ test("Rule B-prime is uniform and general-only while protected pool money has no
   assert.equal(first.rule, "B-prime");
   assert.equal(first.problemId, problemA.id);
   assert.equal(second.problemId, problemB.id);
-  assert.equal(second.runBudgetCents, 10_000);
+  assert.equal(second.runBudgetCents, 5_000);
   assert.equal(second.fundingMode, "general-only");
 });
 
 test("capacity, status, pair locks, and opposite directions define eligibility", () => {
   const blocked = selectSamplingDecision(snapshot({
-    capacityCents: 4_999,
+    capacityCents: 1_600,
     generalCents: 50_000,
     pairs: [pair(problemA.id, "prove", 50_000, 50_000)],
   }));
@@ -119,13 +141,14 @@ test("capacity, status, pair locks, and opposite directions define eligibility",
       pair(problemA.id, "prove", 50_000, 50_000, {
         unsettledClaim: { claimTs: 1, workerId: "worker-4" },
       }),
-      pair(problemA.id, "disprove", 5_000, 5_000),
+      pair(problemA.id, "disprove", 4_000, 4_000),
       pair(problemB.id, "prove", 50_000, 50_000, { status: "PendingReview" }),
     ],
   }), { draw: () => 0 });
   assert.equal(direction.rule, "B");
   assert.equal(direction.problemId, problemA.id);
   assert.equal(direction.direction, "disprove");
+  assert.equal(direction.runBudgetCents, 4_000);
 });
 
 test("the default draw is always inside its exact integer domain", () => {
@@ -234,7 +257,7 @@ test("step-zero sweeping is re-callable and retains received-donation liability"
   assert.equal(findPair(state, problemA.id, "disprove").weightableCents, 0);
 });
 
-test("real Rule A then Rule B claims never supplement a selected pool with general credit", async (context) => {
+test("real donor-funded claims reserve $50 without supplementing from general credit", async (context) => {
   const fixture = await createFixture(context);
   donate(fixture, {
     problemId: problemA.id,
@@ -271,22 +294,86 @@ test("real Rule A then Rule B claims never supplement a selected pool with gener
   });
   assert.equal(ruleA.outcome, "claimed");
   assert.equal(ruleA.decision.rule, "A");
-  assert.equal(ruleA.claim.problemId, problemB.id);
-  assert.equal(ruleA.claim.poolFundedCents, 50_000);
+  assert.equal(ruleA.claim.problemId, problemA.id);
+  assert.equal(ruleA.claim.budgetCents, 5_000);
+  assert.equal(ruleA.claim.poolFundedCents, 5_000);
 
   const worker2 = createRuntime(fixture, r2, "worker-2");
-  const ruleB = await runSamplingCycle({
+  const secondRuleA = await runSamplingCycle({
     worker: worker2,
     ledger: fixture.ledger,
     draw: () => 0,
     artifactRetryOptions: noDelayRetry,
     clock: fixture.clock,
   });
-  assert.equal(ruleB.outcome, "claimed");
-  assert.equal(ruleB.decision.rule, "B");
-  assert.equal(ruleB.claim.problemId, problemA.id);
-  assert.equal(ruleB.claim.budgetCents, 8_000);
-  assert.equal(ruleB.claim.poolFundedCents, 8_000);
+  assert.equal(secondRuleA.outcome, "claimed");
+  assert.equal(secondRuleA.decision.rule, "A");
+  assert.equal(secondRuleA.claim.problemId, problemB.id);
+  assert.equal(secondRuleA.claim.budgetCents, 5_000);
+  assert.equal(secondRuleA.claim.poolFundedCents, 5_000);
+});
+
+test("capacity exhausted after a snapshot causes bounded resampling", async (context) => {
+  const fixture = await createFixture(context);
+  for (const [index, problemId] of [problemA.id, problemB.id].entries()) {
+    donate(fixture, {
+      problemId,
+      direction: "prove",
+      amountCents: 5_000,
+      creditedOffsetMs: index + 1,
+    });
+  }
+  fixture.ledger.treasuryFund({
+    amountCents: 10_000,
+    externalReference: `capacity-race-fund-${fixtureSequence}`,
+    settledContributionCents: 10_000,
+  });
+  fixture.ledger.reconcileAnthropicSpend({
+    cutoffAt: new Date(fixture.now - 1_000).toISOString(),
+    actualSpendCents: 5_000,
+    externalReference: `capacity-race-spend-${fixtureSequence}`,
+    note: "Inject globally reconciled provider spend before the sampling race.",
+  });
+  assert.equal(
+    fixture.ledger.samplingSnapshot().spendableCapacityCents,
+    5_000,
+  );
+  const worker = createRuntime(fixture, new FakeR2(), "worker-1");
+  let injected = false;
+  const racedLedger = {
+    samplingSnapshot: fixture.ledger.samplingSnapshot.bind(fixture.ledger),
+    sweepSolvedProblems: fixture.ledger.sweepSolvedProblems.bind(fixture.ledger),
+    claim(input) {
+      if (!injected) {
+        injected = true;
+        fixture.ledger.claim({
+          problemId: problemB.id,
+          direction: "prove",
+          runBudgetCents: 5_000,
+          workerId: "worker-4",
+          fundingMode: "pool-only",
+        });
+      }
+      return fixture.ledger.claim(input);
+    },
+  };
+
+  const result = await runSamplingCycle({
+    worker,
+    ledger: racedLedger,
+    draw: () => 0,
+    artifactRetryOptions: noDelayRetry,
+    clock: fixture.clock,
+  });
+
+  assert.equal(result.outcome, "resample");
+  assert.equal(result.reason, "claim-snapshot-raced");
+  assert.deepEqual(
+    new Set(result.claimFailures.map((failure) => failure.code)),
+    new Set(["insufficient-capacity", "pair-already-claimed"]),
+  );
+  assert.equal(result.claimFailures.length, 2);
+  assert.equal(fixture.ledger.listUnsettledClaims().length, 1);
 });
 
 test("Rule B-prime consumes general credit without changing protected pools", async (context) => {
@@ -381,7 +468,7 @@ test("four workers racing the same snapshot converge to four distinct claims", a
   assert.equal(fixture.ledger.listUnsettledClaims().length, 4);
 });
 
-test("the worker loop recovers, claims, runs, and returns to an idle sampling state", async (context) => {
+test("the worker loop recovers, claims, runs, and stops cleanly", async (context) => {
   const fixture = await createFixture(context);
   donate(fixture, {
     problemId: problemA.id,
@@ -415,7 +502,10 @@ test("the worker loop recovers, claims, runs, and returns to an idle sampling st
     idlePollIntervalMs: 1,
     clock: fixture.clock,
     signal: controller.signal,
-    onState: async (state) => states.push(state),
+    onState: async (state) => {
+      states.push(state);
+      if (state.event === "worker-claim-finished") controller.abort();
+    },
     sleep: async () => controller.abort(),
   });
 
@@ -425,10 +515,9 @@ test("the worker loop recovers, claims, runs, and returns to an idle sampling st
   assert.ok(states.some((state) => state.event === "worker-startup-recovery"));
   assert.ok(states.some((state) => state.result.outcome === "claimed"));
   assert.ok(states.some((state) => state.event === "worker-claim-finished"));
-  assert.ok(states.some((state) => state.result.outcome === "treasury-blocked"));
 });
 
-test("the deployment runs exactly four supervised workers with isolated credentials", async () => {
+test("the deployment scales one to four supervised workers with isolated credentials", async () => {
   const [
     exampleEnvironment,
     service,
@@ -449,6 +538,7 @@ test("the deployment runs exactly four supervised workers with isolated credenti
       new RegExp(`WORKER_${workerNumber}_ANTHROPIC_API_KEY=`),
     );
   }
+  assert.match(exampleEnvironment, /^WORKER_COUNT=4$/m);
   assert.doesNotMatch(exampleEnvironment, /WORKER_\d+_ANTHROPIC_API_KEY_ID=/);
   assert.match(service, /EnvironmentFile=\/etc\/indiemath\/workers\/%i\.env/);
   assert.match(service, /^Restart=always$/m);
@@ -467,13 +557,20 @@ test("the deployment runs exactly four supervised workers with isolated credenti
     /--env-file-if-exists="\$\{worker_env_file\}"/,
   );
   assert.match(setup, /process\.env\.INDIEMATH_WORKER_ENV_FILE/);
-  assert.match(setup, /validateWorkerFleet\(workerConfigs\)/);
-  assert.match(setup, /await bootstrapFableMathContexts\(/);
+  assert.match(setup, /parseWorkerCount\(process\.env\.WORKER_COUNT/);
+  assert.match(setup, /workerIdsForCount\(workerCount\)/);
+  assert.match(setup, /validateWorkerFleet\(workerConfigs, \{ workerCount \}\)/);
+  assert.match(setup, /await verifyPriorResearchContexts\(/);
   assert.match(setup, /createR2Client\(\{ config: workerConfigs\[0\] \}\)/);
-  assert.match(setup, /skipped \$\{fableBootstrap\.skippedExisting\} existing/);
+  assert.match(
+    setup,
+    /Verified \$\{priorResearch\.total\} preserved prior-research contexts in R2/,
+  );
   assert.match(setup, /mode: 0o700/);
   assert.match(setup, /0o600/);
-  assert.match(setup, /for \(const workerId of WORKER_IDS\)/);
+  assert.match(setup, /for \(const workerId of activeWorkerIds\)/);
+  assert.match(setup, /WORKER_IDS\.filter\(/);
+  assert.match(setup, /\["disable", "--now", service\]/);
   assert.match(setup, /execFileSync\(systemctlBinary, \["enable", service\]/);
   assert.match(setup, /execFileSync\(systemctlBinary, \["restart", service\]/);
   assert.match(runner, /await runWorkerLoop\(/);

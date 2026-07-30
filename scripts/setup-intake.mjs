@@ -52,26 +52,52 @@ const serviceGroup = commandOutput("id", ["-gn", serviceUser]);
 const nodeBinary = commandOutput("which", ["node"]);
 const systemctlBinary = commandOutput("which", ["systemctl"]);
 
-let unit = await readFile(
+let intakeUnit = await readFile(
   path.join(rootDir, "ops", "indiemath-intake.service"),
   "utf8",
 );
-unit = replaceUnitDirective(unit, "User", serviceUser);
-unit = replaceUnitDirective(unit, "Group", serviceGroup);
-unit = replaceUnitDirective(unit, "WorkingDirectory", rootDir);
-unit = replaceUnitDirective(unit, "EnvironmentFile", environmentPath);
-unit = replaceUnitDirective(
-  unit,
+intakeUnit = configureUnit(intakeUnit);
+intakeUnit = replaceUnitDirective(
+  intakeUnit,
   "ExecStart",
   `${nodeBinary} ${path.join(rootDir, "scripts", "run-open-collective-intake.mjs")}`,
 );
-const installedUnitPath = "/etc/systemd/system/indiemath-intake.service";
-await atomicWrite(installedUnitPath, unit, 0o644);
+let monitorUnit = await readFile(
+  path.join(rootDir, "ops", "indiemath-monitor.service"),
+  "utf8",
+);
+monitorUnit = configureUnit(monitorUnit);
+monitorUnit = replaceUnitDirective(
+  monitorUnit,
+  "ExecStart",
+  `${nodeBinary} ${path.join(rootDir, "scripts", "run-health-monitor.mjs")}`,
+);
+const monitorTimer = await readFile(
+  path.join(rootDir, "ops", "indiemath-monitor.timer"),
+  "utf8",
+);
+await Promise.all([
+  atomicWrite(
+    "/etc/systemd/system/indiemath-intake.service",
+    intakeUnit,
+    0o644,
+  ),
+  atomicWrite(
+    "/etc/systemd/system/indiemath-monitor.service",
+    monitorUnit,
+    0o644,
+  ),
+  atomicWrite(
+    "/etc/systemd/system/indiemath-monitor.timer",
+    monitorTimer,
+    0o644,
+  ),
+]);
 
 execFileSync(systemctlBinary, ["daemon-reload"], { stdio: "inherit" });
 execFileSync(
   systemctlBinary,
-  ["enable", "indiemath-intake.service"],
+  ["enable", "indiemath-intake.service", "indiemath-monitor.timer"],
   { stdio: "inherit" },
 );
 execFileSync(
@@ -79,8 +105,19 @@ execFileSync(
   ["restart", "indiemath-intake.service"],
   { stdio: "inherit" },
 );
+execFileSync(
+  systemctlBinary,
+  ["restart", "indiemath-monitor.timer"],
+  { stdio: "inherit" },
+);
+execFileSync(
+  systemctlBinary,
+  ["start", "indiemath-monitor.service"],
+  { stdio: "inherit" },
+);
 console.log(
-  `Enabled Open Collective intake and publisher from ${rootDir} as ${serviceUser}.`,
+  `Enabled Open Collective intake, publisher, and health monitor from `
+    + `${rootDir} as ${serviceUser}.`,
 );
 
 function absolutePath(value, label) {
@@ -119,6 +156,18 @@ function replaceUnitDirective(unit, directive, value) {
   const pattern = new RegExp(`^${directive}=.*$`, "m");
   if (!pattern.test(unit)) fail(`Service template is missing ${directive}.`);
   return unit.replace(pattern, `${directive}=${value}`);
+}
+
+function configureUnit(unit) {
+  let configured = replaceUnitDirective(unit, "User", serviceUser);
+  configured = replaceUnitDirective(configured, "Group", serviceGroup);
+  configured = replaceUnitDirective(configured, "WorkingDirectory", rootDir);
+  configured = replaceUnitDirective(
+    configured,
+    "EnvironmentFile",
+    environmentPath,
+  );
+  return configured;
 }
 
 function fail(message) {

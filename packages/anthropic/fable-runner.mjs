@@ -3,6 +3,7 @@ import {
   compactedContextKey,
   humanTranscriptKey,
   rawTranscriptKey,
+  researchSessionTranscriptKey,
   r2ArtifactUri,
   solutionKey,
 } from "#indiemath/shared";
@@ -10,13 +11,18 @@ import {
   buildFableRequest,
   buildFableSystemPrompt,
   buildInitialResearchMessage,
+  parseSubmittedNoSolution,
   parseSubmittedSolution,
   renderSolutionArtifact,
 } from "./protocol.mjs";
 import { priceAnthropicUsage } from "./pricing.mjs";
 import { retryAnthropicOperation } from "./retry.mjs";
 import { collectMessageStream } from "./stream.mjs";
-import { DEFAULT_MAX_TOKENS } from "./constants.mjs";
+import {
+  CLAUDE_FABLE_MODEL,
+  DEFAULT_MAX_TOKENS,
+  TASK_BUDGET_MINIMUM_TOKENS,
+} from "./constants.mjs";
 
 const CONTINUATION_CONTEXT_CHARACTER_LIMIT = 200_000;
 export const DEFAULT_HARD_STOP_BUFFER_MS = 5 * 60 * 1_000;
@@ -29,6 +35,36 @@ export class WorkerProcessCrashError extends Error {
     this.boundary = boundary;
     this.retryable = false;
   }
+}
+
+export async function republishPublicResearchArtifacts({ ledger, r2 } = {}) {
+  assertPort(ledger, "ledger", ["inspect"]);
+  assertPort(r2, "R2", ["putObject"]);
+  const checkpoints = ledger.inspect().claimResponses;
+  const sessions = new Map();
+  for (const checkpoint of checkpoints) {
+    const claim = {
+      problemId: checkpoint.problemId,
+      direction: checkpoint.direction,
+      claimTs: checkpoint.claimTs,
+    };
+    await mirrorHumanTranscript({ r2, claim, checkpoint });
+    const pairKey = `${checkpoint.problemId}\u0000${checkpoint.direction}`;
+    const session = sessions.get(pairKey) ?? { claim, checkpoints: [] };
+    session.checkpoints.push(checkpoint);
+    sessions.set(pairKey, session);
+  }
+  for (const session of sessions.values()) {
+    await mirrorResearchSession({
+      r2,
+      claim: session.claim,
+      checkpoints: session.checkpoints,
+    });
+  }
+  return Object.freeze({
+    responseArtifactCount: checkpoints.length,
+    researchSessionCount: sessions.size,
+  });
 }
 
 export async function runFableClaim({
@@ -62,6 +98,7 @@ export async function runFableClaim({
     "getClaim",
     "getProblem",
     "listClaimResponses",
+    "listPairClaimResponses",
     "checkpointResponse",
     "settle",
     "resolve",
@@ -87,6 +124,7 @@ export async function runFableClaim({
 
   let claim = await ledger.getClaim(claimKey);
   let checkpoints = [...await ledger.listClaimResponses(claimKey)];
+  let sessionCheckpoints = [...await ledger.listPairClaimResponses(claimKey)];
   const settleClaim = (solutionUri) => settleCurrentClaim({
     ledger,
     r2,
@@ -95,6 +133,11 @@ export async function runFableClaim({
     onBoundary,
   });
   await mirrorCheckpoints({ r2, claim: claimKey, checkpoints });
+  await mirrorResearchSession({
+    r2,
+    claim: claimKey,
+    checkpoints: sessionCheckpoints,
+  });
   if (claim.settled) {
     return terminalResult("already_settled", claim, checkpoints);
   }
@@ -110,24 +153,38 @@ export async function runFableClaim({
       onBoundary,
     });
   }
+  if (priorTerminal.kind === "no_solution") {
+    const settledClaim = await settleClaim();
+    return terminalResult("no_solution", settledClaim, checkpoints, {
+      report: priorTerminal.report,
+    });
+  }
   if (priorTerminal.kind === "refusal") {
     const settledClaim = await settleClaim();
     return terminalResult("refusal", settledClaim, checkpoints);
   }
-
   const initialRequest = checkpoints[0]?.request;
-  const totalTaskBudget = initialRequest?.output_config?.task_budget?.total
-    ?? taskBudgetTokens;
+  const totalTaskBudget = taskBudgetTokens ?? taskBudgetTokensForCents({
+    budgetCents: claim.budgetCents,
+    pricingTable,
+  });
+  const priorTaskBudget = initialRequest?.output_config?.task_budget?.total;
   let systemPrompt;
   let messages;
   let container = checkpoints.at(-1)?.containerId;
+  let renewTaskBudget = checkpoints.length > 0 && priorTaskBudget !== totalTaskBudget;
 
   if (checkpoints.length) {
     const last = checkpoints.at(-1);
     systemPrompt = extractSystemPrompt(initialRequest);
-    messages = continuationMessages(last);
+    const continuation = prepareContinuationMessages(last);
+    if (renewTaskBudget || continuation.taskBudgetExhausted) {
+      messages = renewedTaskBudgetMessages(sessionCheckpoints);
+      renewTaskBudget = true;
+    } else {
+      messages = continuation.messages;
+    }
   } else {
-    const contexts = await readDirectionContexts(r2, claim.problemId);
     systemPrompt = buildFableSystemPrompt({
       problem,
       direction: claim.direction,
@@ -137,7 +194,15 @@ export async function runFableClaim({
       rejectionNotes,
       reviewedResults,
     });
-    messages = [buildInitialResearchMessage(contexts)];
+    const priorCheckpoint = sessionCheckpoints.at(-1);
+    if (priorCheckpoint) {
+      messages = renewedTaskBudgetMessages(sessionCheckpoints);
+      container = priorCheckpoint.containerId;
+      renewTaskBudget = true;
+    } else {
+      const contexts = await readDirectionContexts(r2, claim.problemId);
+      messages = [buildInitialResearchMessage(contexts)];
+    }
   }
 
   while (true) {
@@ -161,10 +226,21 @@ export async function runFableClaim({
       return terminalResult("budget_headroom", settledClaim, checkpoints);
     }
 
+    const resetsTaskBudget = renewTaskBudget;
     const request = buildFableRequest({
       messages,
       systemPrompt,
       taskBudgetTokens: totalTaskBudget,
+      ...(renewTaskBudget
+        ? {
+            taskBudgetRemainingTokens: taskBudgetTokensForCents({
+              budgetCents: remainingCents,
+              pricingTable,
+              maximumTokens: totalTaskBudget,
+            }),
+          }
+        : {}),
+      enableCompaction: !resetsTaskBudget,
       maxTokens: effectiveMaxTokens,
       ...(effort === undefined ? {} : { effort }),
       ...(compactionTriggerTokens === undefined
@@ -173,6 +249,7 @@ export async function runFableClaim({
       ...(pauseAfterCompaction ? { pauseAfterCompaction: true } : {}),
       ...(container ? { container } : {}),
     });
+    renewTaskBudget = false;
     const requestSignal = deadlineSignal(signal, hardStopMs - clock());
     let response;
     let requestStartedAt;
@@ -217,6 +294,7 @@ export async function runFableClaim({
                       claim: claimKey,
                       sequence: checkpoints.length + 1,
                       streamAttempts,
+                      sessionCheckpoints,
                     });
                     await reachBoundary(onBoundary, "after_r2_partial_mirror", {
                       claim: claimKey,
@@ -309,6 +387,7 @@ export async function runFableClaim({
     claim = checkpoint.claim;
     if (checkpoint.outcome === "checkpointed") {
       checkpoints.push(checkpoint.response);
+      sessionCheckpoints.push(checkpoint.response);
     } else if (!checkpoints.some((row) => row.messageId === response.id)) {
       checkpoints = [...await ledger.listClaimResponses(claimKey)];
     }
@@ -325,6 +404,11 @@ export async function runFableClaim({
       streamAttempts,
     });
     await persistContinuationContext({ r2, claim: claimKey, checkpoints });
+    await mirrorResearchSession({
+      r2,
+      claim: claimKey,
+      checkpoints: sessionCheckpoints,
+    });
     await reachBoundary(onBoundary, "after_r2_checkpoint_mirror", {
       claim: claimKey,
       checkpoint: checkpoint.response,
@@ -340,6 +424,12 @@ export async function runFableClaim({
         ledger,
         r2,
         onBoundary,
+      });
+    }
+    if (terminal.kind === "no_solution") {
+      const settledClaim = await settleClaim();
+      return terminalResult("no_solution", settledClaim, checkpoints, {
+        report: terminal.report,
       });
     }
     if (terminal.kind === "refusal") {
@@ -364,11 +454,18 @@ export async function runFableClaim({
       }
     }
 
-    messages = continuationMessages(checkpoint.response);
+    const continuation = prepareContinuationMessages(checkpoint.response);
+    if (continuation.taskBudgetExhausted) {
+      messages = renewedTaskBudgetMessages(sessionCheckpoints);
+      renewTaskBudget = true;
+    } else {
+      messages = continuation.messages;
+      renewTaskBudget = false;
+    }
   }
 }
 
-function continuationMessages(checkpoint) {
+export function prepareContinuationMessages(checkpoint) {
   const messages = structuredClone(checkpoint.request.messages);
   messages.push({
     role: "assistant",
@@ -400,6 +497,26 @@ function continuationMessages(checkpoint) {
             };
           }
         }
+        if (tool.name === "submit_no_solution") {
+          try {
+            parseSubmittedNoSolution(tool.input);
+            return {
+              type: "tool_result",
+              tool_use_id: tool.id,
+              is_error: false,
+              content:
+                "Progress was recorded. Continue the same investigation from the exact prior state. "
+                + "Do not repeat completed checks; advance the research frontier.",
+            };
+          } catch (error) {
+            return {
+              type: "tool_result",
+              tool_use_id: tool.id,
+              is_error: true,
+              content: `Invalid submit_no_solution payload: ${error.message}`,
+            };
+          }
+        }
         return {
           type: "tool_result",
           tool_use_id: tool.id,
@@ -408,11 +525,11 @@ function continuationMessages(checkpoint) {
         };
       }),
     });
-    return messages;
+    return continuationResult(messages);
   }
   switch (checkpoint.response.stop_reason) {
     case "pause_turn":
-      return messages;
+      return continuationResult(messages);
     case "max_tokens":
       messages.push({
         role: "user",
@@ -420,33 +537,138 @@ function continuationMessages(checkpoint) {
           "Continue from the exact prior state. The last response reached its "
           + "per-request token limit; preserve all proof obligations.",
       });
-      return messages;
+      return continuationResult(messages);
     case "model_context_window_exceeded":
       messages.push({
         role: "user",
         content:
           "Resume from the retained compaction context and continue the investigation.",
       });
-      return messages;
+      return continuationResult(messages);
     default:
       messages.push({
         role: "user",
         content:
-          "Continue investigating. Do not stop with prose alone; submit_solution "
-          + "is the only accepted terminal signal.",
+          "[IndieMath funded continuation] This is another API turn inside the same active funded claim. "
+          + "Resume from the exact prior state and produce genuinely new work. Do not repeat completed checks, "
+          + "restate the retained history, or stop at a summary. Pursue a new path, strengthen an incomplete "
+          + "argument, or falsify a remaining obstruction. Call submit_solution only for a complete proof or "
+          + "disproof. Do not announce whether the dollar budget is exhausted; only the harness tracks it.",
       });
-      return messages;
+      return collapseTaskBudgetExhaustion(messages);
   }
+}
+
+export function taskBudgetTokensForCents({
+  budgetCents,
+  pricingTable,
+  model = CLAUDE_FABLE_MODEL,
+  maximumTokens = Number.MAX_SAFE_INTEGER,
+} = {}) {
+  if (!Number.isSafeInteger(budgetCents) || budgetCents < 0) {
+    throw new TypeError("budgetCents must be a nonnegative safe integer.");
+  }
+  if (!Number.isSafeInteger(maximumTokens) || maximumTokens < TASK_BUDGET_MINIMUM_TOKENS) {
+    throw new TypeError(
+      `maximumTokens must be at least ${TASK_BUDGET_MINIMUM_TOKENS}.`,
+    );
+  }
+  const outputRate = pricingTable?.models?.[model]
+    ?.output_cents_per_million_tokens;
+  if (!Number.isSafeInteger(outputRate) || outputRate < 1) {
+    throw new TypeError(`Pricing table is missing an output rate for ${model}.`);
+  }
+  const derived = Number(
+    BigInt(budgetCents) * 1_000_000n / BigInt(outputRate),
+  );
+  return Math.min(
+    maximumTokens,
+    Math.max(TASK_BUDGET_MINIMUM_TOKENS, derived),
+  );
+}
+
+function continuationResult(messages, taskBudgetExhausted = false) {
+  return Object.freeze({
+    messages: Object.freeze(messages),
+    taskBudgetExhausted,
+  });
+}
+
+function collapseTaskBudgetExhaustion(messages) {
+  if (!assistantReportsTaskBudgetExhaustion(messages.at(-2))) {
+    return continuationResult(messages);
+  }
+  const retained = structuredClone(messages);
+  let removed = 0;
+  while (isFundedContinuation(retained.at(-1))) {
+    const assistant = retained.at(-2);
+    if (!assistantReportsTaskBudgetExhaustion(assistant)) break;
+    retained.splice(-2, 2);
+    removed += 1;
+  }
+  retained.push({
+    role: "user",
+    content:
+      "[IndieMath task-budget renewal] The prior model task-token countdown ended, but the same funded "
+      + "claim remains active and has a renewed task budget. Continue the exact same investigation now. "
+      + "Produce substantive new research rather than another terminal budget message. Do not state that "
+      + "the financial budget is exhausted; only the harness tracks dollars.",
+  });
+  return continuationResult(retained, removed > 0);
+}
+
+export function renewedTaskBudgetMessages(checkpoints) {
+  if (!Array.isArray(checkpoints) || checkpoints.length === 0) {
+    throw new TypeError("checkpoints must be a nonempty array.");
+  }
+  const context = renderContinuationContext(checkpoints);
+  return Object.freeze([Object.freeze({
+    role: "user",
+    content:
+      "[IndieMath client-side carry-forward after task-budget renewal]\n\n"
+      + `${context}\n`
+      + "The prior model task-token countdown ended, but the same funded claim remains active with a "
+      + "renewed task budget. Continue this exact investigation now and produce substantive new research. "
+      + "Do not repeat a terminal budget message and do not state that the financial budget is exhausted; "
+      + "only the harness tracks dollars.",
+  })]);
+}
+
+function isFundedContinuation(message) {
+  if (message?.role !== "user" || typeof message.content !== "string") return false;
+  return message.content.startsWith("[IndieMath funded continuation]")
+    || message.content.startsWith("Resume from the exact prior state");
+}
+
+function assistantReportsTaskBudgetExhaustion(message) {
+  if (message?.role !== "assistant" || !Array.isArray(message.content)) return false;
+  const text = message.content
+    .filter((block) => block?.type === "text")
+    .map((block) => block.text ?? "")
+    .join("\n");
+  return isTaskBudgetExhaustionText(text);
 }
 
 function terminalAction(response) {
   if (!response) return { kind: "none" };
   for (const block of response.content ?? []) {
-    if (block?.type !== "tool_use" || block.name !== "submit_solution") continue;
-    try {
-      return { kind: "solution", solution: parseSubmittedSolution(block.input) };
-    } catch {
-      return { kind: "none" };
+    if (block?.type !== "tool_use") continue;
+    if (block.name === "submit_solution") {
+      try {
+        return { kind: "solution", solution: parseSubmittedSolution(block.input) };
+      } catch {
+        return { kind: "none" };
+      }
+    }
+    if (block.name === "submit_no_solution") {
+      try {
+        return {
+          kind: "no_solution",
+          report: parseSubmittedNoSolution(block.input),
+        };
+      } catch {
+        return { kind: "none" };
+      }
     }
   }
   if (response.stop_reason === "refusal") return { kind: "refusal" };
@@ -597,7 +819,13 @@ async function mirrorCheckpoint({
   ]);
 }
 
-async function mirrorPartialStream({ r2, claim, sequence, streamAttempts }) {
+async function mirrorPartialStream({
+  r2,
+  claim,
+  sequence,
+  streamAttempts,
+  sessionCheckpoints = [],
+}) {
   const key = rawTranscriptKey({ ...claim, sequence });
   const events = streamAttempts.flatMap((streamed) => streamed.events.map((event) => ({
     schemaVersion: 1,
@@ -632,6 +860,21 @@ async function mirrorPartialStream({ r2, claim, sequence, streamAttempts }) {
         },
       },
     ),
+    r2.putObject(
+      researchSessionTranscriptKey(claim),
+      renderResearchSession({
+        checkpoints: sessionCheckpoints,
+        partialText: streamedHumanText(streamAttempts),
+      }),
+      {
+        contentType: "text/markdown; charset=utf-8",
+        metadata: {
+          state: "streaming",
+          problemId: claim.problemId,
+          direction: claim.direction,
+        },
+      },
+    ),
   ]);
 }
 
@@ -663,7 +906,8 @@ function renderPartialHumanTranscript({ claim, sequence, streamAttempts }) {
       .join("");
     return [
       `## Attempt ${streamed.attempt}`,
-      text.trim() || "_No human-readable text has streamed yet._",
+      stripTaskBudgetControlParagraphs(text)
+        || "_No human-readable text has streamed yet._",
     ].join("\n\n");
   });
   return [
@@ -675,12 +919,41 @@ function renderPartialHumanTranscript({ claim, sequence, streamAttempts }) {
   ].join("\n\n");
 }
 
+function streamedHumanText(streamAttempts) {
+  const streamed = streamAttempts.at(-1);
+  if (!streamed) return "";
+  return streamed.events
+    .filter((event) => event?.type === "content_block_delta")
+    .map((event) => event.delta)
+    .filter((delta) => delta?.type === "text_delta")
+    .map((delta) => delta.text ?? "")
+    .join("");
+}
+
 function renderHumanTranscript({ claim, checkpoint }) {
+  const sections = renderCheckpointSections(checkpoint);
+  return [
+    `# ${claim.problemId} ${claim.direction} response ${checkpoint.sequence}`,
+    `- Claim: ${claim.claimTs}`,
+    `- Message: ${checkpoint.messageId}`,
+    ...(checkpoint.requestId ? [`- Request: ${checkpoint.requestId}`] : []),
+    `- Model: ${checkpoint.modelId}`,
+    `- Stop reason: ${checkpoint.stopReason ?? "unknown"}`,
+    `- Completed: ${checkpoint.completedAt}`,
+    ...sections,
+    "",
+  ].join("\n\n");
+}
+
+function renderCheckpointSections(checkpoint) {
   const sections = [];
   for (const block of checkpoint.response.content ?? []) {
     switch (block?.type) {
       case "text":
-        if (block.text?.trim()) sections.push(block.text.trim());
+        if (block.text?.trim()) {
+          const publicText = stripTaskBudgetControlParagraphs(block.text);
+          if (publicText) sections.push(publicText);
+        }
         break;
       case "compaction":
         if (block.content?.trim()) {
@@ -688,6 +961,22 @@ function renderHumanTranscript({ claim, checkpoint }) {
         }
         break;
       case "tool_use":
+        if (block.name === "submit_no_solution") {
+          try {
+            const report = parseSubmittedNoSolution(block.input);
+            sections.push([
+              report.summary,
+              report.researchMarkdown,
+              `Verification notes: ${report.verificationNotes}`,
+              ...(report.citations.length
+                ? [`Citations:\n${report.citations.map((item) => `- ${item}`).join("\n")}`]
+                : []),
+            ].join("\n\n"));
+            break;
+          } catch {
+            // Preserve an invalid historical payload in its raw form below.
+          }
+        }
         sections.push([
           `## Client tool: ${block.name ?? "unknown"}`,
           "```json",
@@ -723,17 +1012,33 @@ function renderHumanTranscript({ claim, checkpoint }) {
         break;
     }
   }
-  return [
-    `# ${claim.problemId} ${claim.direction} response ${checkpoint.sequence}`,
-    `- Claim: ${claim.claimTs}`,
-    `- Message: ${checkpoint.messageId}`,
-    ...(checkpoint.requestId ? [`- Request: ${checkpoint.requestId}`] : []),
-    `- Model: ${checkpoint.modelId}`,
-    `- Stop reason: ${checkpoint.stopReason ?? "unknown"}`,
-    `- Completed: ${checkpoint.completedAt}`,
-    ...sections,
-    "",
-  ].join("\n\n");
+  return sections
+    .map(stripTaskBudgetControlParagraphs)
+    .filter(Boolean);
+}
+
+async function mirrorResearchSession({ r2, claim, checkpoints }) {
+  if (!checkpoints.length) return;
+  await r2.putObject(
+    researchSessionTranscriptKey(claim),
+    renderResearchSession({ checkpoints }),
+    {
+      contentType: "text/markdown; charset=utf-8",
+      metadata: {
+        state: "completed",
+        problemId: claim.problemId,
+        direction: claim.direction,
+        lastMessageId: checkpoints.at(-1).messageId,
+      },
+    },
+  );
+}
+
+function renderResearchSession({ checkpoints, partialText = "" }) {
+  const sections = checkpoints.flatMap(renderCheckpointSections);
+  const publicPartialText = stripTaskBudgetControlParagraphs(partialText);
+  if (publicPartialText) sections.push(publicPartialText);
+  return `${sections.join("\n\n").trim()}\n`;
 }
 
 function humanizeBlockType(type) {
@@ -757,27 +1062,111 @@ async function persistContinuationContext({ r2, claim, checkpoints }) {
 
 function renderContinuationContext(checkpoints) {
   let compaction;
-  let compactionSequence = 0;
-  for (const checkpoint of checkpoints) {
+  let compactionIndex = -1;
+  for (const [index, checkpoint] of checkpoints.entries()) {
     for (const block of checkpoint.response.content ?? []) {
       if (block?.type === "compaction" && typeof block.content === "string") {
         compaction = block.content;
-        compactionSequence = checkpoint.sequence;
+        compactionIndex = index;
       }
     }
   }
   const recent = checkpoints
-    .filter((checkpoint) => checkpoint.sequence >= compactionSequence)
+    .slice(Math.max(0, compactionIndex))
     .flatMap((checkpoint) => checkpoint.response.content ?? [])
-    .filter((block) => block?.type === "text" && typeof block.text === "string")
-    .map((block) => block.text)
+    .map(continuationBlockText)
+    .filter(Boolean)
     .join("\n\n");
-  const text = [
+  const fixed = [
     "# Carry-forward research context",
-    compaction ? "## Server compaction\n\n" + compaction : "",
-    recent ? "## Subsequent research output\n\n" + recent : "",
+    compaction
+      ? "## Server compaction\n\n" + stripTaskBudgetControlParagraphs(compaction)
+      : "",
   ].filter(Boolean).join("\n\n");
-  return `${text.slice(-CONTINUATION_CONTEXT_CHARACTER_LIMIT)}\n`;
+  const recentHeader = "## Subsequent research output\n\n";
+  const availableRecentCharacters = Math.max(
+    0,
+    CONTINUATION_CONTEXT_CHARACTER_LIMIT - fixed.length - recentHeader.length - 2,
+  );
+  const retainedRecent = recent.length <= availableRecentCharacters
+    ? recent
+    : `[Earlier post-compaction output omitted at a message boundary.]\n\n${tailAtParagraphBoundary(
+        recent,
+        availableRecentCharacters,
+      )}`;
+  return `${[
+    fixed,
+    retainedRecent ? recentHeader + retainedRecent : "",
+  ].filter(Boolean).join("\n\n")}\n`;
+}
+
+function continuationBlockText(block) {
+  if (block?.type === "text" && typeof block.text === "string") {
+    return stripTaskBudgetControlParagraphs(block.text);
+  }
+  if (block?.type !== "tool_use" || block.name !== "submit_no_solution") {
+    return "";
+  }
+  try {
+    const report = parseSubmittedNoSolution(block.input);
+    return [
+      `## No-solution report: ${report.title}`,
+      report.summary,
+      report.researchMarkdown,
+      `Verification notes: ${report.verificationNotes}`,
+      ...(report.citations.length
+        ? [`Citations:\n${report.citations.map((item) => `- ${item}`).join("\n")}`]
+        : []),
+    ].join("\n\n");
+  } catch {
+    return "";
+  }
+}
+
+function isTaskBudgetExhaustionText(text) {
+  return typeof text === "string"
+    && text.length <= 2_000
+    && /\b(?:task[ -]|request )?budget(?:\s+\w+){0,2}\s+exhausted\b/i.test(text);
+}
+
+function stripTaskBudgetControlParagraphs(text) {
+  return text
+    .split(/(?<=[.!?])(?=\s)|(?<=\n)/u)
+    .filter((fragment) => !isTaskBudgetControlFragment(fragment))
+    .join("")
+    .split(/\n{2,}/)
+    .filter((paragraph) => !isTaskBudgetControlParagraph(paragraph))
+    .join("\n\n")
+    .trim();
+}
+
+function isTaskBudgetControlFragment(fragment) {
+  return isTerminalControlText(fragment);
+}
+
+function isTaskBudgetControlParagraph(paragraph) {
+  if (paragraph.length > 2_000) return false;
+  return isTerminalControlText(paragraph);
+}
+
+function isTerminalControlText(text) {
+  return /\b(?:task|context|request)?\s*budget(?:\s+\w+){0,4}\s+exhausted\b/i
+    .test(text)
+    || /\b(?:remaining )?budget cannot fund\b/i.test(text)
+    || /\bending (?:the )?(?:funded )?turn\b/i.test(text)
+    || /\b(?:this is the )?terminal state\b/i.test(text)
+    || /\bterminal (?:negative )?record\b/i.test(text)
+    || /\binvestigation complete within funded budget\b/i.test(text)
+    || /\brecord stands as last corrected\b/i.test(text)
+    || /\b(?:terminal|filed) (?:negative )?record\b.*\b(?:complete|definitive|final|stands)\b/i
+      .test(text);
+}
+
+function tailAtParagraphBoundary(text, maximumCharacters) {
+  if (maximumCharacters <= 0) return "";
+  const tail = text.slice(-maximumCharacters);
+  const boundary = tail.indexOf("\n\n");
+  return boundary === -1 ? tail : tail.slice(boundary + 2);
 }
 
 async function readDirectionContexts(r2, problemId) {

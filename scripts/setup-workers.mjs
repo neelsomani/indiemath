@@ -16,11 +16,16 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
   parseWorkerConfig,
+  parseWorkerCount,
   validateWorkerFleet,
   WORKER_IDS,
+  workerIdsForCount,
 } from "#indiemath/shared";
 import { createR2Client } from "#indiemath/r2";
-import { bootstrapFableMathContexts } from "#indiemath/workers";
+import {
+  PRIOR_RESEARCH_MANIFEST_KEY,
+  verifyPriorResearchContexts,
+} from "#indiemath/workers";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const arguments_ = new Set(process.argv.slice(2));
@@ -30,12 +35,14 @@ if (arguments_.has("--help")) {
   console.log(`
 Usage: sudo ./setup-workers.sh [--check]
 
-Validates four unique worker API keys from the protected IndieMath environment.
-Without --check, seeds missing FableMath carry-forward context without
-overwriting existing worker context, writes one root-only environment per
-worker, installs the systemd template, and enables and restarts all four
-workers. Common service settings load from /etc/indiemath/indiemath.env; the
-four staging secrets load only from /etc/indiemath/workers.env.
+Reads WORKER_COUNT (1–4, default 4) and validates one unique worker API key for
+each active worker from the protected IndieMath environment.
+Without --check, verifies the preserved prior-research contexts in R2, writes
+one root-only environment per
+active worker, installs the systemd template, enables and restarts worker-1
+through worker-N, and stops and disables any surplus worker services. Common
+service settings load from /etc/indiemath/indiemath.env; staging secrets load
+only from /etc/indiemath/workers.env.
 `.trim());
   process.exit(0);
 }
@@ -64,26 +71,27 @@ const workerEnvironmentStat = await stat(workerEnvironmentPath)
 if (!workerEnvironmentStat?.isFile()) {
   fail(`Worker credential file does not exist: ${workerEnvironmentPath}.`);
 }
-const workerEnvironments = WORKER_IDS.map(workerEnvironment);
+const workerCount = parseWorkerCount(process.env.WORKER_COUNT?.trim() || "4");
+const activeWorkerIds = workerIdsForCount(workerCount);
+const workerEnvironments = activeWorkerIds.map(workerEnvironment);
 const workerConfigs = workerEnvironments.map(parseWorkerConfig);
-validateWorkerFleet(workerConfigs);
-console.log("Validated four unique IndieMath worker identities and Anthropic keys.");
+validateWorkerFleet(workerConfigs, { workerCount });
+console.log(
+  `Validated ${workerCount} unique IndieMath worker `
+    + `${workerCount === 1 ? "identity and Anthropic key" : "identities and Anthropic keys"}.`,
+);
 if (checkOnly) process.exit(0);
 
-const fableSeedDirectory = path.join(rootDir, "seed", "fable-math");
-const fableManifest = JSON.parse(
-  await readFile(path.join(fableSeedDirectory, "manifest.json"), "utf8"),
+const researchStore = createR2Client({ config: workerConfigs[0] });
+const priorResearchManifest = JSON.parse(
+  await (await researchStore.getObject(PRIOR_RESEARCH_MANIFEST_KEY)).text(),
 );
-const fableBootstrap = await bootstrapFableMathContexts({
-  r2: createR2Client({ config: workerConfigs[0] }),
-  manifest: fableManifest,
-  loadArtifact: (artifact) => (
-    readFile(path.join(fableSeedDirectory, artifact), "utf8")
-  ),
+const priorResearch = await verifyPriorResearchContexts({
+  r2: researchStore,
+  manifest: priorResearchManifest,
 });
 console.log(
-  `FableMath carry-forward context: seeded ${fableBootstrap.seeded}; `
-    + `skipped ${fableBootstrap.skippedExisting} existing.`,
+  `Verified ${priorResearch.total} preserved prior-research contexts in R2.`,
 );
 
 const serviceUser = process.env.INDIEMATH_SERVICE_USER ?? "indiemath";
@@ -131,16 +139,33 @@ const installedUnitPath = "/etc/systemd/system/indiemath-worker@.service";
 await atomicWrite(installedUnitPath, unit, 0o644);
 
 execFileSync(systemctlBinary, ["daemon-reload"], { stdio: "inherit" });
-for (const workerId of WORKER_IDS) {
+for (const workerId of activeWorkerIds) {
   const service = `indiemath-worker@${workerId}.service`;
   execFileSync(systemctlBinary, ["enable", service], { stdio: "inherit" });
   execFileSync(systemctlBinary, ["restart", service], { stdio: "inherit" });
 }
-console.log(`Enabled four supervised workers from ${rootDir} as ${serviceUser}.`);
+for (const workerId of WORKER_IDS.filter(
+  (candidate) => !activeWorkerIds.includes(candidate),
+)) {
+  const service = `indiemath-worker@${workerId}.service`;
+  execFileSync(
+    systemctlBinary,
+    ["disable", "--now", service],
+    { stdio: "inherit" },
+  );
+  await unlink(path.join(workerEnvironmentDirectory, `${workerId}.env`))
+    .catch((error) => {
+      if (error?.code !== "ENOENT") throw error;
+    });
+}
+console.log(
+  `Enabled ${workerCount} supervised IndieMath `
+    + `${workerCount === 1 ? "worker" : "workers"} from ${rootDir} as ${serviceUser}.`,
+);
 
 function workerEnvironment(workerId) {
   const suffix = workerId.slice("worker-".length);
-  return Object.freeze({
+  const environment = {
     INDIEMATH_RUNTIME: required("INDIEMATH_RUNTIME"),
     INDIEMATH_DB: required("INDIEMATH_DB"),
     R2_ENDPOINT: required("R2_ENDPOINT"),
@@ -149,7 +174,12 @@ function workerEnvironment(workerId) {
     R2_SECRET_ACCESS_KEY: required("R2_SECRET_ACCESS_KEY"),
     WORKER_ID: workerId,
     ANTHROPIC_API_KEY: required(`WORKER_${suffix}_ANTHROPIC_API_KEY`),
-  });
+  };
+  const runsPausedReason = process.env.INDIEMATH_RUNS_PAUSED_REASON?.trim();
+  if (runsPausedReason) {
+    environment.INDIEMATH_RUNS_PAUSED_REASON = runsPausedReason;
+  }
+  return Object.freeze(environment);
 }
 
 function renderEnvironment(environment) {

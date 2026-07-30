@@ -32,6 +32,10 @@ export function compactedContextKey({ problemId, direction }) {
   return `transcripts/${parseProblemId(problemId)}/${parseDirection(direction)}/compacted.md`;
 }
 
+export function researchSessionTranscriptKey({ problemId, direction }) {
+  return `transcripts/${parseProblemId(problemId)}/${parseDirection(direction)}/session.md`;
+}
+
 export function solutionKey({ problemId, direction, claimTs }) {
   return `solutions/${parseProblemId(problemId)}/${parseDirection(direction)}/${
     parsePositiveInteger(claimTs, "claimTs")

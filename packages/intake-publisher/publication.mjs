@@ -13,6 +13,7 @@ import {
   parsePublisherSnapshot,
   rawTranscriptKey,
   rawTranscriptPrefix,
+  runControlFromPauseReason,
 } from "#indiemath/shared";
 
 const PUBLIC_SCHEMA_VERSION = 1;
@@ -21,12 +22,15 @@ const RECENT_DONATION_LIMIT = 100;
 export function buildPublicDocuments({
   source,
   generatedAt,
+  runsPausedReason,
 }) {
   requireSourceSnapshot(source);
   const publishedAt = timestamp(generatedAt, "generatedAt");
+  const runControl = runControlFromPauseReason(runsPausedReason);
   const publicationId = sha256(canonicalJson({
     generatedAt: publishedAt,
     catalogHash: source.catalogHash,
+    runControl,
     source,
   }));
   const ledgerKey = publicPublicationLedgerKey(publicationId);
@@ -43,10 +47,12 @@ export function buildPublicDocuments({
   );
   const treasury = deriveTreasuryPublication(source.treasury);
   const reviews = source.reviewedResults.map(publicReview);
-  const runs = source.claims.map((claim) => publicRun(
-    claim,
-    source.claimResponses.filter((response) => sameClaim(response, claim)),
-  ));
+  const runs = source.claims
+    .map((claim) => publicRun(
+      claim,
+      source.claimResponses.filter((response) => sameClaim(response, claim)),
+    ))
+    .filter(isPublicResearchRun);
   const catalogProblems = new Map(source.catalog.problems.map((problem) => [
     problem.id,
     problem,
@@ -60,72 +66,69 @@ export function buildPublicDocuments({
     tier,
   ]));
 
-  const problems = source.problems.map((ledgerProblem) => {
-    const catalogProblem = catalogProblems.get(ledgerProblem.problemId);
-    if (!catalogProblem) {
-      throw new Error(
-        `Synced catalog is missing ledger problem ${ledgerProblem.problemId}.`,
+  const problems = source.problems
+    .filter((ledgerProblem) => catalogProblems.has(ledgerProblem.problemId))
+    .map((ledgerProblem) => {
+      const catalogProblem = catalogProblems.get(ledgerProblem.problemId);
+      const problemDonations = donations.filter((donation) => (
+        displayDestination(donation)?.problemId === ledgerProblem.problemId
+      ));
+      const problemPools = ["prove", "disprove"].map((direction) => {
+        const pool = pools.get(pairKey(ledgerProblem.problemId, direction));
+        if (!pool) {
+          throw new Error(`Missing pool ${ledgerProblem.problemId}/${direction}.`);
+        }
+        const tier = tiers.get(pairKey(ledgerProblem.problemId, direction));
+        return compact({
+          problemId: ledgerProblem.problemId,
+          direction,
+          balanceCents: pool.balanceCents,
+          claimableBalanceCents: pool.claimableBalanceCents,
+          cumulativeDonationsCents: pool.cumulativeDonationsCents,
+          unprocessedCents: sumCents(problemDonations
+            .filter((donation) => (
+              displayDestination(donation)?.direction === direction
+            ))
+            .map((donation) => donation.unprocessedCents)),
+          checkoutUrl: tier?.checkoutUrl,
+          minimumContributionCents: tier?.minimumAmountCents,
+        });
+      });
+      const liveClaims = runs.filter((run) => (
+        run.problemId === ledgerProblem.problemId && run.status === "running"
+      ));
+      const problemReviews = reviews.filter(
+        (review) => review.problemId === ledgerProblem.problemId,
       );
-    }
-    const problemDonations = donations.filter((donation) => (
-      displayDestination(donation)?.problemId === ledgerProblem.problemId
-    ));
-    const problemPools = ["prove", "disprove"].map((direction) => {
-      const pool = pools.get(pairKey(ledgerProblem.problemId, direction));
-      if (!pool) {
-        throw new Error(`Missing pool ${ledgerProblem.problemId}/${direction}.`);
-      }
-      const tier = tiers.get(pairKey(ledgerProblem.problemId, direction));
+      const totalPoolBalanceCents = sumCents(
+        problemPools.map((pool) => pool.balanceCents),
+      );
       return compact({
         problemId: ledgerProblem.problemId,
-        direction,
-        balanceCents: pool.balanceCents,
-        claimableBalanceCents: pool.claimableBalanceCents,
-        cumulativeDonationsCents: pool.cumulativeDonationsCents,
-        unprocessedCents: sumCents(problemDonations
-          .filter((donation) => (
-            displayDestination(donation)?.direction === direction
-          ))
-          .map((donation) => donation.unprocessedCents)),
-        checkoutUrl: tier?.checkoutUrl,
-        minimumContributionCents: tier?.minimumAmountCents,
+        catalogRevision: ledgerProblem.catalogRevision,
+        slug: catalogProblem.slug,
+        domain: catalogProblem.domain,
+        title: catalogProblem.title,
+        statement: catalogProblem.statement,
+        directions: catalogProblem.directions,
+        source: catalogProblem.source,
+        status: ledgerProblem.status,
+        totalPoolBalanceCents,
+        unprocessedCents: sumCents(
+          problemPools.map((pool) => pool.unprocessedCents),
+        ),
+        pools: problemPools,
+        liveClaims,
+        pendingSolutions: pendingSolutions(ledgerProblem),
+        reviewedResults: problemReviews,
+        recentDonations: problemDonations
+          .slice()
+          .sort(reverseDonationOrder)
+          .slice(0, RECENT_DONATION_LIMIT),
+        solvedWithResidue: ledgerProblem.status === "Solved"
+          && problemPools.some((pool) => pool.claimableBalanceCents > 0),
       });
-    });
-    const liveClaims = runs.filter((run) => (
-      run.problemId === ledgerProblem.problemId && run.status === "running"
-    ));
-    const problemReviews = reviews.filter(
-      (review) => review.problemId === ledgerProblem.problemId,
-    );
-    const totalPoolBalanceCents = sumCents(
-      problemPools.map((pool) => pool.balanceCents),
-    );
-    return compact({
-      problemId: ledgerProblem.problemId,
-      catalogRevision: ledgerProblem.catalogRevision,
-      slug: catalogProblem.slug,
-      domain: catalogProblem.domain,
-      title: catalogProblem.title,
-      statement: catalogProblem.statement,
-      directions: catalogProblem.directions,
-      source: catalogProblem.source,
-      status: ledgerProblem.status,
-      totalPoolBalanceCents,
-      unprocessedCents: sumCents(
-        problemPools.map((pool) => pool.unprocessedCents),
-      ),
-      pools: problemPools,
-      liveClaims,
-      pendingSolutions: pendingSolutions(ledgerProblem),
-      reviewedResults: problemReviews,
-      recentDonations: problemDonations
-        .slice()
-        .sort(reverseDonationOrder)
-        .slice(0, RECENT_DONATION_LIMIT),
-      solvedWithResidue: ledgerProblem.status === "Solved"
-        && problemPools.some((pool) => pool.claimableBalanceCents > 0),
-    });
-  }).sort(problemDisplayOrder);
+    }).sort(problemDisplayOrder);
 
   const publicLedger = compact({
     schemaVersion: PUBLIC_SCHEMA_VERSION,
@@ -153,6 +156,14 @@ export function buildPublicDocuments({
     )),
     fundingEvents: source.fundingEvents.map(publicFundingEvent),
     settlementSnapshots: source.settlementSnapshots.map(publicSettlementSnapshot),
+    rampSpend: source.rampSpend
+      ? {
+          actualSpendCents: source.rampSpend.actualSpendCents,
+          sourceTransactionCount: source.rampSpend.sourceTransactionCount,
+          cutoffAt: source.rampSpend.cutoffAt,
+          lastObservedAt: source.rampSpend.lastObservedAt,
+        }
+      : undefined,
   });
   const ledgerBody = `${canonicalJson(publicLedger)}\n`;
   const ledgerSha256 = sha256(ledgerBody);
@@ -169,6 +180,7 @@ export function buildPublicDocuments({
     ledgerKey,
     ledgerSha256,
     unprocessedCents,
+    runControl,
     treasury,
     generalCredit: publicLedger.generalCredit,
     problems,
@@ -194,6 +206,7 @@ export async function publishPublicLedgerOnce({
   ledger,
   r2,
   clock = () => new Date(),
+  runsPausedReason,
 }) {
   assertPort(ledger, "ledger", ["publicationSnapshot"]);
   assertPort(r2, "R2", ["putObject"]);
@@ -201,6 +214,7 @@ export async function publishPublicLedgerOnce({
   const documents = buildPublicDocuments({
     source: ledger.publicationSnapshot(),
     generatedAt: clock(),
+    runsPausedReason,
   });
   const immutableOptions = {
     contentType: "application/json; charset=utf-8",
@@ -273,6 +287,7 @@ export class PublicLedgerPublisherController {
   #r2;
   #clock;
   #intervalMilliseconds;
+  #runsPausedReason;
   #wake;
 
   constructor({
@@ -280,6 +295,7 @@ export class PublicLedgerPublisherController {
     r2,
     clock = () => new Date(),
     intervalSeconds = 30,
+    runsPausedReason,
   }) {
     assertPort(ledger, "ledger", ["publicationSnapshot"]);
     assertPort(r2, "R2", ["putObject"]);
@@ -291,6 +307,7 @@ export class PublicLedgerPublisherController {
     this.#r2 = r2;
     this.#clock = clock;
     this.#intervalMilliseconds = intervalSeconds * 1_000;
+    this.#runsPausedReason = runsPausedReason;
   }
 
   poke() {
@@ -302,6 +319,7 @@ export class PublicLedgerPublisherController {
       ledger: this.#ledger,
       r2: this.#r2,
       clock: this.#clock,
+      runsPausedReason: this.#runsPausedReason,
     });
   }
 
@@ -420,6 +438,13 @@ function publicRun(claim, responses) {
   });
 }
 
+function isPublicResearchRun(run) {
+  return run.status === "running"
+    || run.spentCents > 0
+    || run.transcriptSegments.length > 0
+    || Boolean(run.solutionKey);
+}
+
 function publicReview(review) {
   return compact({
     problemId: review.problemId,
@@ -479,6 +504,7 @@ function publicFundingEvent(event) {
     fundingEventId: sha256(`funding-event:${event.externalReference}`),
     amountCents: event.amountCents,
     settledContributionCents: event.settledContributionCents,
+    fundingSource: event.fundingSource,
     fundedAt: event.fundedAt,
   };
 }

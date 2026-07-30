@@ -3,4 +3,5 @@
 set -eu
 
 root_dir="$(git rev-parse --show-toplevel)"
+node "$root_dir/scripts/fingerprint-site-assets.mjs" --check
 exec node "$root_dir/scripts/validate-problem-catalog.mjs"

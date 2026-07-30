@@ -1,0 +1,18 @@
+[Unit]
+Description=IndieMath production health check
+After=network-online.target indiemath-intake.service indiemath-litestream.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=indiemath
+Group=indiemath
+WorkingDirectory=/opt/indiemath/current
+EnvironmentFile=/etc/indiemath/indiemath.env
+ExecStart=/usr/bin/node /opt/indiemath/current/scripts/run-health-monitor.mjs
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/indiemath
+UMask=0077

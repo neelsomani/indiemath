@@ -21,7 +21,6 @@ import {
 } from "#indiemath/fakes";
 import { openLedger } from "#indiemath/ledger";
 import {
-  executeOpenCollectiveRefund,
   executeStripeRefund,
   reconcileStripeSettlements,
   runOpenCollectiveIntakeOnce,
@@ -148,7 +147,6 @@ test("charge-level intake survives pagination, restart, recurring orders, and re
     fixture.ledger.getDonation("txn-generic").destination.kind,
     "general",
   );
-
   const beforeReplay = fixture.ledger.accountingSnapshot();
   const replay = await runOpenCollectiveIntakeOnce({
     ledger: fixture.ledger,
@@ -161,38 +159,8 @@ test("charge-level intake survives pagination, restart, recurring orders, and re
   fixture.ledger.assertConservation();
 });
 
-test("Open Collective and Stripe refund retries converge to one provider operation", async (context) => {
+test("Stripe net-full refund retries converge to one provider operation", async (context) => {
   const fixture = await createFixture(context);
-  const openCollective = new FakeOpenCollective({
-    transactions: [
-      transaction(
-        "txn-oc-refund",
-        "order-oc-refund",
-        "2026-08-01",
-        undefined,
-        "Ada",
-      ),
-    ],
-  });
-  await runOpenCollectiveIntakeOnce({ ledger: fixture.ledger, openCollective });
-  const first = await executeOpenCollectiveRefund({
-    ledger: fixture.ledger,
-    openCollective,
-    donationDedupId: "txn-oc-refund",
-    idempotencyReference: "refund-oc-1",
-  });
-  const replay = await executeOpenCollectiveRefund({
-    ledger: fixture.ledger,
-    openCollective,
-    donationDedupId: "txn-oc-refund",
-    idempotencyReference: "refund-oc-1",
-  });
-  assert.equal(first.outcome, "completed");
-  assert.equal(replay.outcome, "duplicate");
-  assert.equal(openCollective.calls.filter((call) => (
-    call.operation === "refundTransaction" && call.duplicate === false
-  )).length, 1);
-
   const stripeCollective = new FakeOpenCollective({
     transactions: [
       transaction(
@@ -201,7 +169,12 @@ test("Open Collective and Stripe refund retries converge to one provider operati
         "2026-08-02",
         undefined,
         "Grace",
-        { stripeChargeId: "ch_partial123" },
+        {
+          grossCents: 20_000,
+          feesCents: 610,
+          netCents: 19_390,
+          stripeChargeId: "ch_netfull19390",
+        },
       ),
     ],
   });
@@ -210,24 +183,186 @@ test("Open Collective and Stripe refund retries converge to one provider operati
     openCollective: stripeCollective,
   });
   const stripe = new FakeStripe();
+  assert.throws(() => fixture.ledger.beginRefund({
+      donationDedupId: "txn-stripe-refund",
+      idempotencyReference: "refund-stripe-partial",
+      requestedAmountCents: 5_000,
+    }), /Only full refunds are supported/);
+  assert.equal(stripe.calls.length, 0);
+  assert.throws(
+    () => fixture.ledger.getAdjustment("refund-stripe-partial"),
+    /Unknown adjustment/,
+  );
   await executeStripeRefund({
     ledger: fixture.ledger,
     stripe,
     donationDedupId: "txn-stripe-refund",
     idempotencyReference: "refund-stripe-1",
-    requestedAmountCents: 1_250,
   });
   await executeStripeRefund({
     ledger: fixture.ledger,
     stripe,
     donationDedupId: "txn-stripe-refund",
     idempotencyReference: "refund-stripe-1",
-    requestedAmountCents: 1_250,
   });
   assert.equal(stripe.calls.filter((call) => !call.duplicate).length, 1);
-  assert.equal(fixture.ledger.getDonation("txn-stripe-refund").refundedCents, 1_250);
+  assert.equal(stripe.calls[0].amountCents, 19_390);
+  assert.equal(fixture.ledger.getDonation("txn-stripe-refund").refundedCents, 19_390);
   fixture.ledger.assertConservation();
 });
+
+test("Stripe refunds an existing Open Collective PaymentIntent reference",
+  async (context) => {
+    const fixture = await createFixture(context);
+    fixture.ledger.donate({
+      dedupId: "txn-stripe-payment-intent-refund",
+      orderId: "order-stripe-payment-intent-refund",
+      destination: { kind: "general" },
+      grossCents: 20_000,
+      feesCents: 610,
+      netCents: 19_390,
+      donorTag: "Neel",
+      creditedAt: "2026-08-02T00:00:00.000Z",
+      source: {
+        kind: "open_collective",
+        attribution: "unattributed",
+        metadata: {
+          paymentProcessorUrl:
+            "https://dashboard.stripe.com/id/pi_existing123?account=acct_fake",
+        },
+      },
+    });
+    const stripe = new FakeStripe();
+    await executeStripeRefund({
+      ledger: fixture.ledger,
+      stripe,
+      donationDedupId: "txn-stripe-payment-intent-refund",
+      idempotencyReference: "refund-stripe-payment-intent-1",
+    });
+    assert.equal(stripe.calls.length, 1);
+    assert.deepEqual(stripe.calls[0].target, {
+      kind: "payment_intent",
+      id: "pi_existing123",
+    });
+    assert.equal(stripe.calls[0].amountCents, 19_390);
+    assert.equal(
+      fixture.ledger.getDonation("txn-stripe-payment-intent-refund").refundedCents,
+      19_390,
+    );
+    fixture.ledger.assertConservation();
+  });
+
+test("refund recovery converges across death before and after provider acceptance",
+  async (context) => {
+    const fixture = await createFixture(context);
+    const openCollective = new FakeOpenCollective({
+      transactions: [
+        transaction(
+          "txn-refund-death-before",
+          "order-refund-death-before",
+          "2026-08-01",
+          undefined,
+          "Ada",
+          { stripeChargeId: "ch_refundbefore" },
+        ),
+        transaction(
+          "txn-refund-death-after",
+          "order-refund-death-after",
+          "2026-08-02",
+          undefined,
+          "Grace",
+          { stripeChargeId: "ch_refundafter" },
+        ),
+      ],
+    });
+    await runOpenCollectiveIntakeOnce({
+      ledger: fixture.ledger,
+      openCollective,
+    });
+
+    const acceptedBeforeDeath = new FakeStripe();
+    let rejectBeforeAcceptance = true;
+    const transientStripe = {
+      async refundPayment(input) {
+        if (rejectBeforeAcceptance) {
+          rejectBeforeAcceptance = false;
+          throw new Error("simulated process loss before provider acceptance");
+        }
+        return acceptedBeforeDeath.refundPayment(input);
+      },
+    };
+    await assert.rejects(
+      executeStripeRefund({
+        ledger: fixture.ledger,
+        stripe: transientStripe,
+        donationDedupId: "txn-refund-death-before",
+        idempotencyReference: "refund-death-before",
+      }),
+      /before provider acceptance/,
+    );
+    assert.equal(
+      fixture.ledger.getAdjustment("refund-death-before").status,
+      "pending",
+    );
+    await executeStripeRefund({
+      ledger: fixture.ledger,
+      stripe: transientStripe,
+      donationDedupId: "txn-refund-death-before",
+      idempotencyReference: "refund-death-before",
+    });
+    assert.equal(
+      fixture.ledger.getAdjustment("refund-death-before").status,
+      "completed",
+    );
+
+    const acceptedAfterDeath = new FakeStripe();
+    let loseCompletion = true;
+    const crashBoundaryLedger = {
+      beginRefund: fixture.ledger.beginRefund.bind(fixture.ledger),
+      cancelRefund: fixture.ledger.cancelRefund.bind(fixture.ledger),
+      getDonation: fixture.ledger.getDonation.bind(fixture.ledger),
+      completeRefund(input) {
+        if (loseCompletion) {
+          loseCompletion = false;
+          throw new Error("simulated process loss after provider acceptance");
+        }
+        return fixture.ledger.completeRefund(input);
+      },
+    };
+    await assert.rejects(
+      executeStripeRefund({
+        ledger: crashBoundaryLedger,
+        stripe: acceptedAfterDeath,
+        donationDedupId: "txn-refund-death-after",
+        idempotencyReference: "refund-death-after",
+      }),
+      /after provider acceptance/,
+    );
+    assert.equal(
+      fixture.ledger.getAdjustment("refund-death-after").status,
+      "pending",
+    );
+    assert.equal(
+      acceptedAfterDeath.calls.filter((call) => !call.duplicate).length,
+      1,
+    );
+    const recovered = await executeStripeRefund({
+      ledger: fixture.ledger,
+      stripe: acceptedAfterDeath,
+      donationDedupId: "txn-refund-death-after",
+      idempotencyReference: "refund-death-after",
+    });
+    assert.equal(recovered.outcome, "completed");
+    assert.equal(
+      acceptedAfterDeath.calls.filter((call) => call.duplicate).length,
+      1,
+    );
+    assert.equal(
+      fixture.ledger.getDonation("txn-refund-death-after").refundedCents,
+      4_750,
+    );
+    fixture.ledger.assertConservation();
+  });
 
 test("disputes and paid-payout settlement reconcile through provider references", async (context) => {
   const fixture = await createFixture(context);
@@ -449,14 +584,22 @@ test("real Stripe client pins idempotency and returns privacy-minimized settleme
     assert.equal(health.accountId, "acct_real123");
     assert.equal(health.livemode, false);
     assert.deepEqual(health.currencies, ["usd"]);
-    const refund = await stripe.refundCharge({
+    const chargeRefund = await stripe.refundPayment({
       chargeId: "ch_real123",
       amountCents: 1_250,
       idempotencyReference: "refund-real-1",
     });
-    assert.equal(refund.providerReference, "re_real123");
+    assert.equal(chargeRefund.providerReference, "re_real123");
     assert.equal(requests[1].headers["Idempotency-Key"], "refund-real-1");
     assert.equal(requests[1].body, "charge=ch_real123&amount=1250");
+    const intentRefund = await stripe.refundPayment({
+      paymentIntentId: "pi_real123",
+      amountCents: 1_250,
+      idempotencyReference: "refund-real-2",
+    });
+    assert.equal(intentRefund.providerReference, "re_real123");
+    assert.equal(requests[2].headers["Idempotency-Key"], "refund-real-2");
+    assert.equal(requests[2].body, "payment_intent=pi_real123&amount=1250");
     assert.equal(requests.some((request) => request.pathname.endsWith("/account")), false);
 
     const payouts = await stripe.listPaidPayoutSettlementRecords({
@@ -473,14 +616,27 @@ test("real Stripe client pins idempotency and returns privacy-minimized settleme
     )));
   });
 
-test("deployment assets supervise the authoritative intake and publisher", async () => {
-  const [unit, setup, runner, wrapper, wrapperStat, corsPolicyText] = await Promise.all([
+test("deployment assets supervise intake, publishing, and health monitoring", async () => {
+  const [
+    unit,
+    monitorUnit,
+    monitorTimer,
+    setup,
+    runner,
+    monitorRunner,
+    wrapper,
+    wrapperStat,
+    corsPolicyText,
+  ] = await Promise.all([
     readFile(path.join(rootDir, "ops", "indiemath-intake.service"), "utf8"),
+    readFile(path.join(rootDir, "ops", "indiemath-monitor.service"), "utf8"),
+    readFile(path.join(rootDir, "ops", "indiemath-monitor.timer"), "utf8"),
     readFile(path.join(rootDir, "scripts", "setup-intake.mjs"), "utf8"),
     readFile(
       path.join(rootDir, "scripts", "run-open-collective-intake.mjs"),
       "utf8",
     ),
+    readFile(path.join(rootDir, "scripts", "run-health-monitor.mjs"), "utf8"),
     readFile(path.join(rootDir, "setup-intake.sh"), "utf8"),
     stat(path.join(rootDir, "setup-intake.sh")),
     readFile(path.join(rootDir, "ops", "r2-public-cors.json"), "utf8"),
@@ -490,10 +646,17 @@ test("deployment assets supervise the authoritative intake and publisher", async
   assert.match(unit, /Restart=always/);
   assert.match(unit, /ReadWritePaths=\/var\/lib\/indiemath/);
   assert.match(setup, /\["restart", "indiemath-intake\.service"\]/);
+  assert.match(monitorUnit, /^Type=oneshot$/m);
+  assert.match(monitorUnit, /run-health-monitor\.mjs/);
+  assert.match(monitorTimer, /^OnUnitActiveSec=5min$/m);
+  assert.match(setup, /"indiemath-monitor\.timer"/);
+  assert.match(setup, /\["start", "indiemath-monitor\.service"\]/);
   assert.match(runner, /OpenCollectiveIntakeController/);
   assert.match(runner, /PublicLedgerPublisherController/);
   assert.match(runner, /public-ledger-published/);
   assert.match(runner, /runStripeDisputeIntakeOnce/);
+  assert.match(monitorRunner, /checkOperationalHealth/);
+  assert.match(monitorRunner, /WORKER_COUNT/);
   assert.match(wrapper, /scripts\/setup-intake\.mjs/);
   assert.ok((wrapperStat.mode & 0o111) !== 0, "setup-intake.sh must be executable");
   assert.deepEqual(corsPolicy, [{
@@ -511,16 +674,22 @@ function transaction(
   date,
   tier,
   donorName,
-  { incognito = false, stripeChargeId } = {},
+  {
+    feesCents = 250,
+    grossCents = 5_000,
+    incognito = false,
+    netCents = grossCents - feesCents,
+    stripeChargeId,
+  } = {},
 ) {
   return {
     id,
     type: "CREDIT",
     kind: "CONTRIBUTION",
     createdAt: `${date}T00:00:00.000Z`,
-    grossCents: 5_000,
-    feesCents: 250,
-    netCents: 4_750,
+    grossCents,
+    feesCents,
+    netCents,
     order: {
       id: orderId,
       ...(tier

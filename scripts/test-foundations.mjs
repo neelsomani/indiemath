@@ -9,6 +9,7 @@ import {
   addCents,
   artifactKeysForClaim,
   calculateAvailableToFundCents,
+  calculateOutstandingOwnerAdvanceCents,
   calculateRefundableCents,
   calculateSettledButUnfundedCents,
   deriveDonationWaterline,
@@ -21,8 +22,10 @@ import {
   parseDollarAmount,
   parseDonation,
   parseFrontendConfig,
+  parseIntakePublisherConfig,
   parseReviewedResult,
   parseWorkerConfig,
+  parseWorkerCount,
   publicPublicationLedgerKey,
   publicPublicationStateKey,
   rawTranscriptKey,
@@ -30,6 +33,7 @@ import {
   reviewKey,
   validateWorkerFleet,
   WORKER_IDS,
+  workerIdsForCount,
 } from "#indiemath/shared";
 import {
   createFakeApplication,
@@ -211,14 +215,29 @@ test("one FIFO waterline controls processed badges and refund eligibility", () =
     fundedCents: 4751,
     destinationBalanceCents: 5000,
   }), /is processed and no longer refundable/);
+  assert.throws(() => calculateRefundableCents({
+    donationDedupId: "transaction-3",
+    donations,
+    fundedCents: 4751,
+    pendingRefundCents: 250,
+    destinationBalanceCents: 5000,
+    requestedCents: 4000,
+  }), /Only full refunds are supported.*requested 4000 cents.*3500 cents/);
   assert.equal(calculateRefundableCents({
     donationDedupId: "transaction-3",
     donations,
     fundedCents: 4751,
     pendingRefundCents: 250,
+    destinationBalanceCents: 5000,
+    requestedCents: 3500,
+  }), 3500);
+  assert.throws(() => calculateRefundableCents({
+    donationDedupId: "transaction-3",
+    donations,
+    fundedCents: 4751,
+    pendingRefundCents: 250,
     destinationBalanceCents: 3000,
-    requestedCents: 4000,
-  }), 3000);
+  }), /requires 3500 cents.*only 3000 cents available/);
 
   assert.equal(deriveDonationRefundState({
     donationNetCents: 4750,
@@ -249,11 +268,16 @@ test("completed and pending refunds stay out of treasury funding", () => {
     fundingEventCents: 12000,
     pendingRefundCents: 1500,
   }), 3500);
-  assert.throws(() => calculateSettledButUnfundedCents({
+  assert.equal(calculateSettledButUnfundedCents({
     settledContributionCents: 10000,
     completedRefundCents: 3000,
     fundingEventCents: 8000,
-  }), /cannot exceed settled contributions/);
+  }), 0);
+  assert.equal(calculateOutstandingOwnerAdvanceCents({
+    settledContributionCents: 10000,
+    completedRefundCents: 3000,
+    fundingEventCents: 8000,
+  }), 1000);
 });
 
 test("artifact keys are centralized, exact, and path-safe", () => {
@@ -299,11 +323,26 @@ test("artifact keys are centralized, exact, and path-safe", () => {
   );
 });
 
-test("worker configuration rejects missing and duplicate key secrets", () => {
+test("worker configuration scales from one to four and rejects invalid fleets", () => {
   const configs = WORKER_IDS.map((workerId) => parseWorkerConfig(
     fakeWorkerEnvironment(workerId),
   ));
   assert.equal(validateWorkerFleet(configs).length, 4);
+  for (let workerCount = 1; workerCount <= 4; workerCount += 1) {
+    assert.deepEqual(
+      validateWorkerFleet(configs.slice(0, workerCount), { workerCount })
+        .map((config) => config.workerId),
+      workerIdsForCount(workerCount),
+    );
+  }
+  assert.equal(parseWorkerCount("1"), 1);
+  assert.equal(parseWorkerCount("4"), 4);
+  assert.throws(() => parseWorkerCount(0), /integer from 1 to 4/);
+  assert.throws(() => parseWorkerCount(5), /integer from 1 to 4/);
+  assert.throws(
+    () => validateWorkerFleet([configs[0], configs[2]], { workerCount: 2 }),
+    /missing: worker-2; unexpected: worker-3/,
+  );
 
   assert.throws(
     () => parseWorkerConfig({
@@ -348,6 +387,14 @@ test("worker configuration rejects missing and duplicate key secrets", () => {
     defaultedPaths.pricingTablePath,
     path.join(rootDir, "pricing", "anthropic.json"),
   );
+  assert.equal(parseWorkerConfig({
+    ...fakeWorkerEnvironment("worker-1"),
+    INDIEMATH_RUNS_PAUSED_REASON: "anthropic-monthly-plan-limit",
+  }).runsPausedReason, "anthropic-monthly-plan-limit");
+  assert.throws(() => parseWorkerConfig({
+    ...fakeWorkerEnvironment("worker-1"),
+    INDIEMATH_RUNS_PAUSED_REASON: "unknown-pause",
+  }), /must be one of anthropic-monthly-plan-limit/);
 });
 
 test("frontend derives its fixed public object URLs from one base URL", () => {
@@ -370,6 +417,48 @@ test("frontend derives its fixed public object URLs from one base URL", () => {
     }),
     /must not contain a query or fragment/,
   );
+});
+
+test("Ramp sync is optional but rejects partial or fake-runtime credentials", () => {
+  const productionBase = {
+    INDIEMATH_RUNTIME: "production",
+    INDIEMATH_DB: "/var/lib/indiemath/ledger.sqlite",
+    R2_ENDPOINT: "https://account.r2.cloudflarestorage.com",
+    R2_BUCKET: "indiemath-artifacts",
+    R2_ACCESS_KEY_ID: "r2-access",
+    R2_SECRET_ACCESS_KEY: "r2-secret",
+    OPEN_COLLECTIVE_SLUG: "indiemath",
+    OPEN_COLLECTIVE_GRAPHQL_URL: "https://api.opencollective.com/graphql/v2",
+    OPEN_COLLECTIVE_API_TOKEN: "oc-token",
+  };
+  assert.equal(parseIntakePublisherConfig(productionBase).ramp, undefined);
+  assert.equal(parseIntakePublisherConfig({
+    ...productionBase,
+    INDIEMATH_RUNS_PAUSED_REASON: "anthropic-monthly-plan-limit",
+  }).runsPausedReason, "anthropic-monthly-plan-limit");
+  assert.throws(() => parseIntakePublisherConfig({
+    ...productionBase,
+    RAMP_CLIENT_ID: "ramp-client",
+  }), /Incomplete Ramp configuration; missing RAMP_CLIENT_SECRET, RAMP_CARD_ID/);
+  assert.deepEqual(parseIntakePublisherConfig({
+    ...productionBase,
+    RAMP_CLIENT_ID: "ramp-client",
+    RAMP_CLIENT_SECRET: "ramp-secret",
+    RAMP_CARD_ID: "anthropic-card",
+  }).ramp, {
+    clientId: "ramp-client",
+    clientSecret: "ramp-secret",
+    cardId: "anthropic-card",
+    baseUrl: "https://api.ramp.com/",
+    syncIntervalSeconds: 300,
+  });
+  assert.throws(() => parseIntakePublisherConfig({
+    INDIEMATH_RUNTIME: "fake",
+    INDIEMATH_DB: "/tmp/indiemath.sqlite",
+    R2_BUCKET: "fake",
+    OPEN_COLLECTIVE_SLUG: "indiemath",
+    RAMP_CLIENT_ID: "must-not-enter-fake-runtime",
+  }), /Fake runtime must not receive production credentials: RAMP_CLIENT_ID/);
 });
 
 test("external-service fakes are deterministic and paginated", async () => {
@@ -475,6 +564,11 @@ test("the business terms remain reachable as a page and footer modal", async () 
     assert.match(termsHtml, new RegExp(requiredSection));
   }
   assert.match(termsHtml, /contact@indiemath\.ai/);
+  assert.match(
+    termsHtml,
+    /full net amount after Open Collective and Stripe processing fees/,
+  );
+  assert.match(termsHtml, /partial refunds are not offered/);
   assert.match(
     termsHtml,
     /Lipschitz Strategies LLC, the operator of and counterparty for the IndieMath service/,

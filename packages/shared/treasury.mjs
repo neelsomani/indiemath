@@ -1,43 +1,62 @@
 import { addCents, asCents } from "./money.mjs";
+import { MINIMUM_RUN_BUDGET_CENTS } from "./run-policy.mjs";
 
-export const MINIMUM_RUN_CAPACITY_CENTS = 5_000;
+export const MINIMUM_RUN_CAPACITY_CENTS = MINIMUM_RUN_BUDGET_CENTS;
 
 export function calculateSettledButUnfundedCents({
   settledContributionCents,
   completedRefundCents,
+  settledCompletedRefundCents = completedRefundCents,
   fundingEventCents,
 }) {
   const result = addCents(
     asCents(settledContributionCents, "settledContributionCents"),
-    -asCents(completedRefundCents, "completedRefundCents"),
+    -asCents(
+      settledCompletedRefundCents,
+      "settledCompletedRefundCents",
+    ),
     -asCents(fundingEventCents, "fundingEventCents"),
   );
-  if (result < 0) {
-    throw new RangeError(
-      "Completed refunds plus funding events cannot exceed settled contributions.",
-    );
-  }
-  return result;
+  return Math.max(0, result);
+}
+
+export function calculateOutstandingOwnerAdvanceCents({
+  settledContributionCents,
+  completedRefundCents,
+  settledCompletedRefundCents = completedRefundCents,
+  fundingEventCents,
+}) {
+  return Math.max(0, addCents(
+    asCents(fundingEventCents, "fundingEventCents"),
+    -asCents(settledContributionCents, "settledContributionCents"),
+    asCents(
+      settledCompletedRefundCents,
+      "settledCompletedRefundCents",
+    ),
+  ));
 }
 
 export function calculateAvailableToFundCents({
   settledContributionCents,
   completedRefundCents,
+  settledCompletedRefundCents = completedRefundCents,
   fundingEventCents,
   pendingRefundCents = 0,
+  settledPendingRefundCents = pendingRefundCents,
 }) {
   const settledButUnfunded = calculateSettledButUnfundedCents({
     settledContributionCents,
     completedRefundCents,
+    settledCompletedRefundCents,
     fundingEventCents,
   });
   const available = addCents(
     settledButUnfunded,
-    -asCents(pendingRefundCents, "pendingRefundCents"),
+    -asCents(settledPendingRefundCents, "settledPendingRefundCents"),
   );
   if (available < 0) {
     throw new RangeError(
-      "Pending refund reservations cannot exceed settled-but-unfunded cents.",
+      "Settled pending refund reservations cannot exceed settled-but-unfunded cents.",
     );
   }
   return available;
@@ -64,6 +83,14 @@ export function deriveTreasuryPublication(status) {
     status.pendingRefundCents,
     "treasury.pendingRefundCents",
   );
+  const settledCompletedRefundCents = asCents(
+    status.settledCompletedRefundCents ?? completedRefundCents,
+    "treasury.settledCompletedRefundCents",
+  );
+  const settledPendingRefundCents = asCents(
+    status.settledPendingRefundCents ?? pendingRefundCents,
+    "treasury.settledPendingRefundCents",
+  );
   const fundingEventCents = asCents(
     status.fundingEventCents,
     "treasury.fundingEventCents",
@@ -87,6 +114,7 @@ export function deriveTreasuryPublication(status) {
   const expectedSettledButUnfunded = calculateSettledButUnfundedCents({
     settledContributionCents,
     completedRefundCents,
+    settledCompletedRefundCents,
     fundingEventCents,
   });
   if (settledButUnfundedCents !== expectedSettledButUnfunded) {
@@ -94,11 +122,34 @@ export function deriveTreasuryPublication(status) {
       "treasury.settledButUnfundedCents disagrees with its source totals.",
     );
   }
+  const outstandingOwnerAdvanceCents = asCents(
+    status.outstandingOwnerAdvanceCents
+      ?? calculateOutstandingOwnerAdvanceCents({
+        settledContributionCents,
+        completedRefundCents,
+        settledCompletedRefundCents,
+        fundingEventCents,
+      }),
+    "treasury.outstandingOwnerAdvanceCents",
+  );
+  const expectedOutstandingOwnerAdvance = calculateOutstandingOwnerAdvanceCents({
+    settledContributionCents,
+    completedRefundCents,
+    settledCompletedRefundCents,
+    fundingEventCents,
+  });
+  if (outstandingOwnerAdvanceCents !== expectedOutstandingOwnerAdvance) {
+    throw new RangeError(
+      "treasury.outstandingOwnerAdvanceCents disagrees with its source totals.",
+    );
+  }
   const expectedAvailableToFund = calculateAvailableToFundCents({
     settledContributionCents,
     completedRefundCents,
+    settledCompletedRefundCents,
     fundingEventCents,
     pendingRefundCents,
+    settledPendingRefundCents,
   });
   if (availableToFundCents !== expectedAvailableToFund) {
     throw new RangeError(
@@ -109,8 +160,11 @@ export function deriveTreasuryPublication(status) {
     settledContributionCents,
     completedRefundCents,
     pendingRefundCents,
+    settledCompletedRefundCents,
+    settledPendingRefundCents,
     fundingEventCents,
     settledButUnfundedCents,
+    outstandingOwnerAdvanceCents,
     availableToFundCents,
     spendableCapacityCents,
     liveReservationsCents,

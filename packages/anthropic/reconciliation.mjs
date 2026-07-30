@@ -116,6 +116,11 @@ export async function runClaimUsageReconciliation({
   }
   return Object.freeze({
     ...result,
+    targetClaim: Object.freeze({
+      problemId: claim.problemId,
+      direction: claim.direction,
+      claimTs,
+    }),
     apiKeyId,
     startTime,
     endTime,

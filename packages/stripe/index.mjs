@@ -49,12 +49,26 @@ export class StripeClient {
     });
   }
 
-  async refundCharge({
+  async refundPayment({
     chargeId,
+    paymentIntentId,
     amountCents,
     idempotencyReference,
   }) {
-    const charge = stripeObjectId(chargeId, "ch_", "chargeId");
+    if (Boolean(chargeId) === Boolean(paymentIntentId)) {
+      throw new TypeError(
+        "Exactly one of chargeId or paymentIntentId is required.",
+      );
+    }
+    const target = chargeId
+      ? {
+          field: "charge",
+          id: stripeObjectId(chargeId, "ch_", "chargeId"),
+        }
+      : {
+          field: "payment_intent",
+          id: stripeObjectId(paymentIntentId, "pi_", "paymentIntentId"),
+        };
     const amount = positiveInteger(amountCents, "amountCents");
     const idempotencyKey = requiredString(
       idempotencyReference,
@@ -62,7 +76,7 @@ export class StripeClient {
     );
     const refund = await this.#request("POST", "refunds", {
       form: {
-        charge,
+        [target.field]: target.id,
         amount: String(amount),
       },
       idempotencyKey,
@@ -70,7 +84,9 @@ export class StripeClient {
     return Object.freeze({
       outcome: "refunded",
       providerReference: stripeObjectId(refund.id, "re_", "refund.id"),
-      chargeId: charge,
+      ...(target.field === "charge"
+        ? { chargeId: target.id }
+        : { paymentIntentId: target.id }),
       amountCents: positiveInteger(refund.amount, "refund.amount"),
       status: refund.status,
     });
@@ -235,6 +251,11 @@ export class StripeClient {
 export function extractStripeChargeId(paymentProcessorUrl) {
   if (typeof paymentProcessorUrl !== "string") return undefined;
   return paymentProcessorUrl.match(/\b(ch_[A-Za-z0-9]+)\b/)?.[1];
+}
+
+export function extractStripePaymentIntentId(paymentProcessorUrl) {
+  if (typeof paymentProcessorUrl !== "string") return undefined;
+  return paymentProcessorUrl.match(/\b(pi_[A-Za-z0-9]+)\b/)?.[1];
 }
 
 function normalizeBalanceTransaction(transaction, payoutId) {

@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "controlledContributions": [
+    {
+      "paymentRail": "card",
+      "transactionId": "replace-with-open-collective-transaction-id"
+    },
+    {
+      "paymentRail": "ach",
+      "transactionId": "replace-with-open-collective-transaction-id"
+    }
+  ],
+  "fundingEventReferences": [
+    "replace-with-ramp-or-bank-transfer-reference"
+  ],
+  "controlledRuns": [
+    {
+      "problemId": "replace-with-problem-id",
+      "direction": "prove",
+      "claimTs": 1,
+      "fundingSource": "pool",
+      "terminalOutcome": "unconditional"
+    },
+    {
+      "problemId": "replace-with-problem-id",
+      "direction": "disprove",
+      "claimTs": 2,
+      "fundingSource": "general",
+      "terminalOutcome": "conditional"
+    },
+    {
+      "problemId": "replace-with-problem-id",
+      "direction": "prove",
+      "claimTs": 3,
+      "fundingSource": "pool",
+      "terminalOutcome": "rejected"
+    }
+  ],
+  "anthropicReportPaths": [
+    "/var/lib/indiemath/launch-anthropic-claim-1.json",
+    "/var/lib/indiemath/launch-anthropic-claim-2.json",
+    "/var/lib/indiemath/launch-anthropic-claim-3.json"
+  ],
+  "litestreamRestore": {
+    "source": "r2",
+    "databasePath": "/var/lib/indiemath/launch-restore.sqlite",
+    "restoredAt": "2026-01-01T00:00:00.000Z"
+  }
+}

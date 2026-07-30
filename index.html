@@ -20,7 +20,7 @@
   <link rel="icon" type="image/x-icon" href="favicon.ico">
   <link rel="icon" type="image/png" sizes="32x32" href="favicon.png">
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
-  <link rel="stylesheet" href="assets/site.css?v=dc1d7fcd">
+  <link rel="stylesheet" href="assets/site.7eaa7831.css?r=1">
   <title>IndieMath - Community-Funded Mathematical Problem Solving</title>
 </head>
 <body data-page="problems">
@@ -31,10 +31,13 @@
       <img class="wordmark-mark" src="apple-touch-icon.png" alt="" aria-hidden="true">
       <span>IndieMath</span>
     </a>
-    <nav class="site-nav" aria-label="Primary navigation">
+    <nav class="site-nav" id="primary-navigation" aria-label="Primary navigation">
       <a href="#problems" aria-current="page">Problems</a>
       <a href="ledger.html">Contribution Tracker</a>
     </nav>
+    <button class="nav-menu-button" type="button" aria-label="Open navigation" aria-controls="primary-navigation" aria-expanded="false">
+      <span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span>
+    </button>
     <a class="github-link" href="https://github.com/neelsomani/indiemath" target="_blank" rel="noopener noreferrer" aria-label="View IndieMath on GitHub">
       <svg viewBox="0 0 16 16" role="img" aria-hidden="true">
         <path d="M8 0C3.58 0 0 3.64 0 8.13c0 3.59 2.29 6.64 5.47 7.71.4.08.55-.18.55-.39 0-.19-.01-.83-.01-1.51-2.01.38-2.53-.5-2.69-.96-.09-.23-.48-.96-.82-1.15-.28-.15-.68-.53-.01-.54.63-.01 1.08.59 1.23.83.72 1.23 1.87.88 2.33.67.07-.53.28-.88.51-1.08-1.78-.21-3.64-.91-3.64-4.02 0-.89.31-1.62.82-2.19-.08-.21-.36-1.04.08-2.16 0 0 .67-.22 2.2.84A7.5 7.5 0 0 1 8 3.89a7.5 7.5 0 0 1 2 .27c1.53-1.06 2.2-.84 2.2-.84.44 1.12.16 1.95.08 2.16.51.57.82 1.3.82 2.19 0 3.12-1.87 3.81-3.65 4.02.29.25.54.74.54 1.51 0 1.09-.01 1.97-.01 2.24 0 .21.15.47.55.39A8.14 8.14 0 0 0 16 8.13C16 3.64 12.42 0 8 0Z"/>
@@ -55,7 +58,7 @@
         </article>
         <article class="metric-chip">
           <strong class="metric-value skeleton-text">—</strong>
-          <span class="metric-label">Compute capacity</span>
+          <span class="metric-label">Available run funds</span>
         </article>
         <article class="metric-chip">
           <strong class="metric-value skeleton-text">—</strong>
@@ -73,6 +76,8 @@
     </aside>
 
     <section class="problems-section ledger-summary" id="problems" aria-label="Problem catalog">
+      <details class="problem-filter-disclosure" id="problem-filter-disclosure" open>
+        <summary>Search problems</summary>
       <form class="problem-controls" id="problem-controls" role="search">
         <label class="search-control">
           <span>Search problems</span>
@@ -102,6 +107,7 @@
           </select>
         </label>
       </form>
+      </details>
 
       <div class="results-line">
         <p id="problem-count" aria-live="polite">Loading the catalog…</p>
@@ -146,6 +152,6 @@
     </div>
   </template>
 
-  <script type="module" src="assets/site.js?v=e93b7d73"></script>
+  <script type="module" src="assets/site.394ad8ca.js?r=1"></script>
 </body>
 </html>
